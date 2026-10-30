@@ -26,6 +26,14 @@ object TorrentEngine {
 
     private const val IDLE_STOP_MS = 90_000L
 
+    /** Bonding retries: how many times, and how far apart. */
+    private const val BONDING_RETRIES = 6
+    private const val BONDING_RETRY_INTERVAL_MS = 20_000L
+
+    /** The proxy must have failed at least this many connections, with zero successes, to be
+     *  considered broken. */
+    private const val MIN_PROXY_ATTEMPTS = 3
+
     private val lock = Any()
     private var manager: SessionManager? = null
     private var users = 0
@@ -36,9 +44,15 @@ object TorrentEngine {
     @Volatile
     private var bonded = false
 
-    /** Set once a torrent found no peers through the proxy: stays off for this session. */
+    /** Set once the proxy itself failed to open a single connection: off for this session. */
     @Volatile
     private var bondingDisabled = false
+
+    private var retryThread: Thread? = null
+
+    /** The session refused the proxy setting (verification after applySettings failed). */
+    @Volatile
+    private var bondingApplyFailed = false
 
     /**
      * Returns the running session, starting it if this is the first torrent.
@@ -47,22 +61,32 @@ object TorrentEngine {
      * plain-language message instead of letting the app die.
      */
     fun acquire(context: Context): SessionManager {
-        val created = synchronized(lock) {
+        val session: SessionManager
+        val tryBonding: Boolean
+        synchronized(lock) {
             cancelIdleStop()
             val existing = manager
             if (existing != null) {
                 users++
-                return existing
+                session = existing
+                tryBonding = !bonded && !bondingDisabled
+            } else {
+                session = startSession()
+                manager = session
+                users++
+                bonded = false
+                bondingDisabled = false
+                bondingApplyFailed = false
+                bonding = BondingProxy(context.applicationContext)
+                tryBonding = true
             }
-            val session = startSession()
-            manager = session
-            users++
-            bonded = false
-            bondingDisabled = false
-            session
         }
-        startBonding(context, created)
-        return created
+        // Bonding is attempted for *every* torrent, not just the first one of a session: the
+        // first attempt often happens before mobile data is reachable (the app warms the
+        // session up at launch), and before this it was never retried - which is exactly the
+        // "magnet links are not bonded" case.
+        if (tryBonding) startBonding(context, session)
+        return session
     }
 
     /** Starts the native session; falls back to plain defaults if settings are rejected. */
@@ -79,14 +103,62 @@ object TorrentEngine {
      * happens when the phone has only one radio.
      */
     private fun startBonding(context: Context, session: SessionManager) {
-        val proxy = BondingProxy(context.applicationContext)
-        synchronized(lock) { bonding = proxy }
+        val proxy = synchronized(lock) {
+            bonding ?: BondingProxy(context.applicationContext).also { bonding = it }
+        }
+
         proxy.startAsync { port ->
             val stillWanted = synchronized(lock) { manager === session && !bondingDisabled }
-            if (stillWanted && applyProxySettings(session, port)) {
+            if (!stillWanted) return@startAsync
+            if (applyProxySettings(session, port)) {
                 synchronized(lock) { bonded = true }
+            } else {
+                bondingApplyFailed = true
             }
         }
+
+        scheduleBondingRetry(context, session)
+    }
+
+    /**
+     * Keeps trying for a couple of minutes when the radios are not both up yet.
+     *
+     * Mobile data commonly appears a few seconds after launch (or after the cell radio wakes
+     * up), and one failed attempt used to be the end of it for the whole session. The proxy has
+     * its own cooldown, so this cannot hammer ConnectivityManager.
+     */
+    private fun scheduleBondingRetry(context: Context, session: SessionManager) {
+        synchronized(lock) {
+            if (retryThread != null) return
+        }
+        val thread = Thread({
+            try {
+                repeat(BONDING_RETRIES) {
+                    try {
+                        Thread.sleep(BONDING_RETRY_INTERVAL_MS)
+                    } catch (interrupted: InterruptedException) {
+                        return@Thread
+                    }
+                    val waiting = synchronized(lock) { manager === session && !bonded && !bondingDisabled }
+                    if (!waiting) return@Thread
+                    val proxy = synchronized(lock) { bonding } ?: return@Thread
+                    proxy.startAsync { port ->
+                        val stillWanted = synchronized(lock) { manager === session && !bondingDisabled }
+                        if (stillWanted && applyProxySettings(session, port)) {
+                            synchronized(lock) { bonded = true }
+                        }
+                    }
+                }
+            } finally {
+                // Always release the slot, otherwise an early exit would block every later retry.
+                synchronized(lock) {
+                    if (retryThread === Thread.currentThread()) retryThread = null
+                }
+            }
+        }, "fd-bond-retry")
+        thread.isDaemon = true
+        synchronized(lock) { retryThread = thread }
+        thread.start()
     }
 
     /** Points libtorrent at the loopback SOCKS5 proxy: peer and tracker TCP go through it. */
@@ -102,7 +174,17 @@ object TorrentEngine {
         pack.setBoolean(settings_pack.bool_types.proxy_tracker_connections.swigValue(), true)
         pack.setBoolean(settings_pack.bool_types.proxy_hostnames.swigValue(), true)
         session.applySettings(pack)
-        true
+
+        // Read it back: applySettings is asynchronous, and reporting "bonded" without checking
+        // would be another way of showing a state that is not real.
+        val applied = runCatching {
+            val live = session.settings()
+            live != null &&
+                live.getInteger(settings_pack.int_types.proxy_type.swigValue()) ==
+                settings_pack.proxy_type_t.socks5.swigValue() &&
+                live.getInteger(settings_pack.int_types.proxy_port.swigValue()) == port
+        }.getOrDefault(true)
+        applied
     }.getOrDefault(false)
 
     /**
@@ -135,8 +217,45 @@ object TorrentEngine {
     /** True while peer connections are spread over both radios. */
     fun isBonded(): Boolean = bonded
 
-    /** "Wi-Fi 12 conns · mobile 9 conns", or null when bonding is off. */
-    fun bondingSummary(): String? = if (bonded) bonding?.describe() else null
+    /** Where bonding stands right now, for the download card. */
+    fun bondingState(): BondingState = synchronized(lock) {
+        BondingStatus.decide(
+            bonded = bonded,
+            disabled = bondingDisabled,
+            proxyExists = bonding != null,
+            starting = bonding?.isStarting() == true,
+            running = bonding?.isRunning() == true,
+            unavailableReason = bonding?.unavailableReason,
+        )
+    }
+
+    /** Human sentence for the card, e.g. "bonding: unavailable - mobile data is not reachable". */
+    fun bondingNote(): String? = synchronized(lock) {
+        val proxy = bonding
+        if (!bonded && bondingApplyFailed) {
+            "bonding: unavailable - the torrent engine did not accept the proxy setting"
+        } else {
+            BondingStatus.note(
+                state = bondingState(),
+                rates = if (bonded) proxy?.describe() else null,
+                reason = proxy?.unavailableReason,
+            )
+        }
+    }
+
+    /**
+     * True only when the *proxy* is the thing that is failing.
+     *
+     * This is what gates the fallback to the default network: a swarm that has not produced a
+     * peer yet (which is normal for the first half minute) must not be read as "bonding is
+     * broken" - that mistake turned bonding off for healthy sessions.
+     */
+    fun bondingIsFailing(): Boolean {
+        synchronized(lock) {
+            val stats = bonding?.stats() ?: return false
+            return stats.attempts >= MIN_PROXY_ATTEMPTS && stats.successes == 0
+        }
+    }
 
     /** Per-radio throughput while bonded; empty when the torrent is on one link. */
     fun bondingRates(): List<BondingProxy.LinkRate> =
@@ -181,6 +300,9 @@ object TorrentEngine {
                         proxyToStop = bonding
                         bonding = null
                         bonded = false
+                        bondingApplyFailed = false
+                        retryThread?.interrupt()
+                        retryThread = null
                     }
                     idleThread = null
                 }
