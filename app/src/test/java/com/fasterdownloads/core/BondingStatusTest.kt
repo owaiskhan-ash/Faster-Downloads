@@ -86,6 +86,7 @@ class BondingStatusTest {
             rates = "Wi-Fi 4.2 MB/s (12) \u00b7 mobile 2.6 MB/s (9)",
             reason = null,
         )
-        assertTrue(note!!.startsWith("bonding: Wi-Fi 4.2 MB/s"))
+        assertTrue(note!!.startsWith("bonded: Wi-Fi 4.2 MB/s"))
+        assertTrue(note.contains("\u00b7 mobile 2.6 MB/s"))
     }
 }
