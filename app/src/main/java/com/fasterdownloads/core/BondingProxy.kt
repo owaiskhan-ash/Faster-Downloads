@@ -350,9 +350,12 @@ class BondingProxy(private val context: Context) {
 }
 
 /** Where a SOCKS5 client wants us to connect. */
-internal sealed class SocksTarget(val port: Int) {
-    data class Ip(val address: InetAddress, port: Int) : SocksTarget(port)
-    data class Host(val host: String, port: Int) : SocksTarget(port)
+internal sealed class SocksTarget {
+    abstract val port: Int
+
+    data class Ip(val address: InetAddress, override val port: Int) : SocksTarget()
+
+    data class Host(val host: String, override val port: Int) : SocksTarget()
 }
 
 /** The 20 lines of SOCKS5 (RFC 1928) this proxy needs, as pure stream functions. */
