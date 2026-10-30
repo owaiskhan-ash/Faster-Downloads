@@ -25,6 +25,14 @@ object Storage {
         return dir
     }
 
+    /** Where BitTorrent payloads are assembled before they are published. */
+    fun torrentDir(context: Context): File {
+        val base = context.getExternalFilesDir("torrents") ?: File(context.filesDir, "torrents")
+        val dir = File(base, "active")
+        if (!dir.exists()) dir.mkdirs()
+        return dir
+    }
+
     fun sanitizeFileName(name: String): String {
         val cleaned = name
             .replace(Regex("[\\\\/:*?\"<>|\\r\\n\\t]"), "_")

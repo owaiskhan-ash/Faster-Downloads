@@ -12,7 +12,6 @@ import java.io.RandomAccessFile
 import java.net.HttpURLConnection
 import java.nio.ByteBuffer
 import java.nio.channels.FileChannel
-import java.security.MessageDigest
 import java.util.ArrayDeque
 import java.util.Collections
 import java.util.concurrent.atomic.AtomicBoolean
@@ -42,7 +41,7 @@ class MultiPathDownloader(
     private val context: Context,
     private val request: DownloadRequest,
     private val emit: (DownloadUiState) -> Unit,
-) {
+) : DownloadEngine {
 
     private class Chunk(val index: Int, val start: Long, val end: Long) {
         val length: Long get() = end - start + 1L
@@ -101,7 +100,7 @@ class MultiPathDownloader(
     private var ticker: Thread? = null
     private var lastResumeSave = 0L
 
-    fun cancel() {
+    override fun cancel() {
         cancelled.set(true)
         // Dropping the sockets makes an in-flight read fail immediately instead of
         // waiting for the read timeout.
@@ -110,7 +109,7 @@ class MultiPathDownloader(
     }
 
     /** Blocking entry point — call it from a background thread. Returns the final state. */
-    fun run(): DownloadUiState {
+    override fun run(): DownloadUiState {
         try {
             emitState {
                 it.copy(
@@ -641,7 +640,7 @@ class MultiPathDownloader(
         if (file.length() != totalBytes) {
             throw IOException("Expected $totalBytes bytes but the file has ${file.length()}")
         }
-        val hash = if (request.verifyHash) sha256(file) else null
+        val hash = if (request.verifyHash) Hashing.sha256(file) else null
         val published = Storage.publish(context, file, displayName)
         runCatching { file.delete() }
         runCatching { resumeFile?.delete() }
@@ -660,21 +659,6 @@ class MultiPathDownloader(
                 links = it.links.map { link -> link.copy(active = false) },
             )
         }
-    }
-
-    private fun sha256(file: File): String? = try {
-        val digest = MessageDigest.getInstance("SHA-256")
-        file.inputStream().use { input ->
-            val buffer = ByteArray(256 * 1024)
-            while (true) {
-                val read = input.read(buffer)
-                if (read < 0) break
-                digest.update(buffer, 0, read)
-            }
-        }
-        digest.digest().joinToString("") { byte -> "%02x".format(byte) }
-    } catch (t: Throwable) {
-        null
     }
 
     // --------------------------------------------------------------- resume

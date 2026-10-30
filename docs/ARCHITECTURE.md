@@ -129,6 +129,24 @@ overwritten in place — resume needs no re-download of the whole file.
    - Android 8–9: copy into the public Downloads directory and notify `MediaScanner`.
 5. Delete the `.part` and journal files, emit `COMPLETED` with path, URI and hash.
 
+## 7b. Torrent engine
+
+`magnet:` links are handled by `MagnetDownloader`, which wraps the `bt` library
+(`bt-core` + `bt-dht` + `bt-http-tracker-client`):
+
+| Step | Call |
+| --- | --- |
+| Build the client | `Bt.client().config(...).storage(FileSystemStorage(dir)).magnet(uri).autoLoadModules().module(DHTModule(...)).stopWhenDownloaded()` |
+| Metadata | `afterTorrentFetched { torrent -> name, size }` (BEP-9) |
+| Progress | `startAsync({ state -> ... }, 500)` -> `getDownloaded()`, `getLeft()`, `getConnectedPeers()` |
+| Cancel | `client.stop()` |
+
+`SpeedMeter` smooths `getDownloaded()` deltas exactly like the HTTP engine, and the
+remaining bytes come from `Torrent.getSize() - getLeft()`. A watchdog fails the job with a
+readable message if no peer returns metadata within two minutes, because a magnet with no
+seeders otherwise waits forever. Single-file payloads are published through the same
+MediaStore path as HTTP downloads; multi-file payloads stay in the torrent folder.
+
 ## 8. Foreground service
 
 `DownloadService` (type `dataSync`) is started with `startForegroundService`, immediately
@@ -149,3 +167,5 @@ blocked read fails instantly instead of waiting for its timeout.
 | Disk full | Positional write throws, abort with the failing offset |
 | User cancels | Sockets dropped, journal written, `CANCELLED` state, partial kept for resume |
 | Process killed | Journal + `.part` survive; a new run resumes |
+| Magnet with no peers | Metadata watchdog fails the job after 120 s with a hint |
+| Magnet cancelled | `client.stop()`, partial data stays and is re-verified on the next run |

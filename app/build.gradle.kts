@@ -12,8 +12,8 @@ android {
         applicationId = "com.fasterdownloads"
         minSdk = 26
         targetSdk = 35
-        versionCode = 3
-        versionName = "0.1.2"
+        versionCode = 4
+        versionName = "0.2.0"
         vectorDrawables { useSupportLibrary = true }
     }
 
@@ -63,6 +63,12 @@ android {
     packaging {
         resources {
             excludes += "/META-INF/{AL2.0,LGPL2.1}"
+            // The BitTorrent library pulls in several Apache-style licenses/notices.
+            excludes += "/META-INF/DEPENDENCIES"
+            excludes += "/META-INF/LICENSE*"
+            excludes += "/META-INF/NOTICE*"
+            excludes += "/META-INF/INDEX.LIST"
+            // Keep META-INF/services/*: bt discovers its modules through ServiceLoader.
         }
     }
 }
@@ -81,6 +87,11 @@ dependencies {
     debugImplementation("androidx.compose.ui:ui-tooling")
 
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.8.1")
+
+    // BitTorrent (magnet links): pure-Java library, DHT + trackers + peer wire protocol.
+    implementation("com.github.atomashpolskiy:bt-core:1.10")
+    implementation("com.github.atomashpolskiy:bt-dht:1.10")
+    implementation("com.github.atomashpolskiy:bt-http-tracker-client:1.10")
 
     testImplementation("junit:junit:4.13.2")
 }

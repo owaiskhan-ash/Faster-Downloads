@@ -168,6 +168,9 @@ jobs:
           * Browser-style request headers (User-Agent, Referer), a shared cookie jar across
             both radios, and a plain-GET fallback so hosts that reject app-shaped or ranged
             requests no longer fail with \`HTTP 403\`.
+          * Downloads \`magnet:\` links over BitTorrent (DHT + trackers) and opens them
+            straight from a browser or the share sheet.
+          * Light and dark mode: neon-on-black inverts to black-on-neon with the system theme.
           * Resumes interrupted transfers chunk-by-chunk and verifies the finished file.
           * Runs in a foreground service with progress notification and cancel action.
 

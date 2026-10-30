@@ -2,7 +2,8 @@
 
 An Android app that downloads **one file over two networks at the same time** — Wi-Fi *and*
 mobile data — by splitting the file into HTTP `Range` chunks and pinning each group of
-sockets to a different radio with Android's `Network` API.
+sockets to a different radio with Android's `Network` API. It also opens **magnet links**
+and pulls them from the BitTorrent swarm.
 
 This is the Plexo idea (multipath downloads over bonded links, see
 [anmolkapil/plexo](https://github.com/anmolkapil/plexo)) rebuilt for Android, where apps
@@ -73,6 +74,9 @@ More detail: [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
 ## Features
 
 - Highlighter-neon UI with hairline outlines, black ink and thin type
+- **Dark mode inverts the palette**: black canvas with neon elements, following the system theme
+- **Magnet links**: `magnet:?xt=urn:btih:...` downloads over BitTorrent (DHT + trackers),
+  and the app registers as a magnet handler so links open straight from the browser
 - Windowed (3 s) speed and ETA readout, so the number is readable instead of jittery
 - Bonded Wi-Fi + mobile-data download with a configurable Wi-Fi share (50–90 %)
 - 1–8 parallel connections per network, shared work queue with retry
@@ -82,6 +86,21 @@ More detail: [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
 - Saves to `Download/FasterDownloads` (MediaStore on Android 10+, direct file on 8–9)
 - Foreground service with progress notification and in-notification cancel
 - Automatic fallback to a single connection when the server ignores `Range`
+
+## Torrents (magnet links)
+
+Paste a `magnet:` URI — or tap one in a browser / share it to the app — and the BitTorrent
+engine takes over, powered by [atomashpolskiy/bt](https://github.com/atomashpolskiy/bt):
+
+- metadata is fetched from the swarm first (BEP-9), then the file name and size appear
+- DHT (BEP-5), HTTP/UDP trackers, PEX and encryption are handled by the library
+- progress, peers and ETA show in the same card; the live notification is shared with HTTP jobs
+- single-file torrents are published to `Download/FasterDownloads`; multi-file torrents stay
+  together in the app's torrent folder
+- torrents always use the device's default network — bonding two radios only applies to
+  HTTP range downloads, because thousands of peer sockets cannot be split meaningfully
+
+Download only content you have the right to.
 
 ## Caveats
 
@@ -93,6 +112,8 @@ More detail: [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
 - **Mobile data is really consumed** while bonded — typically `100 - wifiShare` percent of
   the bytes. Watch your data cap. Carrier billing and tethering rules apply.
 - **Battery.** Two radios plus several sockets drain faster than a normal download.
+- **Torrent speed** depends on the swarm: a magnet with no seeders will stall until the
+  metadata watchdog reports it.
 - The release APK is **debug-signed** unless you provide signing secrets (see below), which
   is fine for sideloading but not for publishing to Play.
 
