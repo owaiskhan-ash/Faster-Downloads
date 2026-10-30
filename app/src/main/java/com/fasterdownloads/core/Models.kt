@@ -61,6 +61,8 @@ data class DownloadUiState(
         LinkProgress(id = "cell", label = "Mobile data"),
     ),
     val message: String = "",
+    /** Engine-level detail for the card: tracker answers, swarm state. */
+    val diagnostics: String? = null,
     val error: String? = null,
     val savedUri: String? = null,
     val savedPath: String? = null,

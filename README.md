@@ -102,6 +102,9 @@ engine takes over, powered by [atomashpolskiy/bt](https://github.com/atomashpols
   `Class.getAnnotatedSuperclass()` (not implemented by Android at any API level) and Guice
   4's normal build generates cglib FastClasses that Android refuses to load; the `no_aop`
   build has neither problem, which is why Maven itself runs on it
+- before the engine starts, the app announces once to the link's HTTP(S) trackers, shows
+  their answers in the card and feeds any peers it found back in through `x.pe` - so a
+  working tracker can rescue a swarm that DHT alone cannot reach
 - metadata is fetched from the swarm first (BEP-9), then the file name and size appear
 - DHT (BEP-5), HTTP/UDP trackers, PEX and encryption are handled by the library
 - progress, peers and ETA show in the same card; the live notification is shared with HTTP jobs

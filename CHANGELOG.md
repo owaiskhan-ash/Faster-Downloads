@@ -3,6 +3,26 @@
 All notable changes to this project are documented here.
 This project follows [Semantic Versioning](https://semver.org/).
 
+## [0.5.0] - 2026-10-30
+
+### Added
+- **Tracker probe and peer injection for magnets.** Before building the client the app now
+  announces once to the link's HTTP(S) trackers itself (raw-benconded `info_hash`, compact
+  peer parsing), shows what came back in the progress card, and hands any peers it found to
+  the engine through `x.pe`. That rescues swarms whose metadata fetch would otherwise
+  depend on DHT alone - which is exactly the "stuck on fetching metadata" case.
+- The card now has a diagnostics line under the torrent row (for example
+  `1/2 HTTP trackers answered · 37 peers · 5 UDP left to the engine`), and a timeout
+  explains *why* it timed out: every tracker refused (network blocking peer traffic) versus
+  trackers answered but know no peers (dead release).
+
+### Fixed
+- **Cleartext HTTP was blocked.** `targetSdk 35` plus Android 9+ network security defaults
+  refuse `http://` traffic, which silently killed plain-HTTP tracker announces *and* any
+  download from an `http://` URL (`UnknownServiceException: CLEARTEXT communication not
+  permitted`). The manifest now sets `usesCleartextTraffic="true"`, which a downloader that
+  must reach arbitrary hosts needs anyway.
+
 ## [0.4.2] - 2026-10-30
 
 ### Fixed
