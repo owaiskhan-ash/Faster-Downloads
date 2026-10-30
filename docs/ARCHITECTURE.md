@@ -213,7 +213,17 @@ libtorrent --TCP--> 127.0.0.1:<port> [BondingProxy] --+--> Network(WIFI)     -> 
   After a successful `applySettings` the setting is read back from `session.settings()`, so
   `bonded = true` means the engine really is proxied.
 * `TorrentEngine` then points the live session at the proxy with `applySettings` - no session
-  restart, so torrents that were already running simply pick it up for new connections.
+  restart, so torrents that were already running simply pick it up for new connections. Note
+  that `session::apply_settings` only *posts* the pack to the session's network thread, so the
+  engine polls `session.settings()` for up to 4 s before believing it; the read-back in 0.9.1
+  happened too early and reported a failure that never happened.
+* **uTP is switched off while bonded**, and that is not a tuning choice. libtorrent never sends
+  uTP through a proxy, and it picks uTP whenever a peer advertises support for it
+  (`torrent::connect_to_peer`): with uTP enabled, the peer connections that carry the data were
+  opened directly on the default network and the proxy carried almost nothing - the two radios
+  never split the swarm. While bonded the session runs `enable_outgoing_utp = false`,
+  `enable_incoming_utp = false`, `enable_outgoing_tcp = true`; [TorrentEngine.disableBonding]
+  sets them back.
 * `pickLink()` hands each new connection to the link with the fewest open connections relative
   to its share; the share is re-measured every 4 s from the bytes each radio actually moved
   (60/40 smoothing, bounded to 20-80 %), which mirrors the HTTP engine's adaptive weighting.
@@ -287,5 +297,6 @@ which picks the data up again (HTTP from the journal, BitTorrent by re-checking 
 | User pauses | Engines drop their sockets, partial data + journal kept, state `PAUSED` |
 | No peer through the bonding proxy | Bonding switched off for the session once 3 attempts opened zero connections; card says why |
 | Mobile data appears after launch | Bonding retried on the next torrent and every 20 s for 2 minutes |
+| Swarm traffic is uTP-only | uTP is off while bonded, so those peers are skipped; TCP peers carry the download |
 | Only one radio available | Proxy never starts; torrents run on the default network |
 | Magnet cancelled | torrent removed from the session, partial data kept in the torrent folder |

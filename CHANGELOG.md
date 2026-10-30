@@ -3,6 +3,30 @@
 All notable changes to this project are documented here.
 This project follows [Semantic Versioning](https://semver.org/).
 
+## [0.9.2] - 2026-10-30
+
+### Fixed
+- **Magnets bond for real now: uTP is switched off while bonded.** libtorrent does not send uTP
+  through a SOCKS5 proxy - and it *prefers* uTP for any peer that advertises support, which is
+  most modern clients (`torrent::connect_to_peer` in libtorrent: `if (enable_outgoing_utp &&
+  peerinfo->supports_utp) { sm = utp_socket_manager(); }`). So a magnet with a proxy configured
+  still opened nearly all of its peer connections directly on the default network: the proxy
+  was configured, reachable and unused, and the card had nothing to show. With bonding on,
+  `enable_outgoing_utp` and `enable_incoming_utp` are now off and `enable_outgoing_tcp` on, so
+  every peer connection is TCP, goes through the loopback SOCKS5 proxy, and is split across the
+  two radios. uTP is handed back when bonding is switched off.
+- **The proxy setting is no longer read back too early.** `session::apply_settings` posts the
+  pack to libtorrent's network thread and returns immediately, so 0.9.1's immediate read-back
+  always saw the old values: `bonded` stayed false and the card claimed "the torrent engine did
+  not accept the proxy setting" while the setting landed a millisecond later. Verification now
+  polls the live settings for up to 4 s and only reports failure when the pack really did not
+  land.
+- Applying the proxy no longer runs on the caller's thread (it could be the main thread during
+  start-up): it happens on its own `fd-bond-apply` thread, guarded so two attempts cannot
+  overlap.
+- When bonded but still waiting for its first peer connection, the card says
+  `no peer through the proxy yet` instead of showing two silent zeroes.
+
 ## [0.9.1] - 2026-10-30
 
 ### Fixed

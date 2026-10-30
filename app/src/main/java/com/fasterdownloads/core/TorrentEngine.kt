@@ -1,6 +1,7 @@
 package com.fasterdownloads.core
 
 import android.content.Context
+import android.os.SystemClock
 import org.libtorrent4j.SessionManager
 import org.libtorrent4j.SessionParams
 import org.libtorrent4j.SettingsPack
@@ -34,6 +35,20 @@ object TorrentEngine {
      *  considered broken. */
     private const val MIN_PROXY_ATTEMPTS = 3
 
+    /**
+     * How long to wait for libtorrent to take the proxy setting.
+     *
+     * `session::apply_settings` posts the pack to the session's network thread and returns
+     * immediately, so reading the settings back in the same breath always shows the *old*
+     * values. That race is why 0.9.1 reported "the torrent engine did not accept the proxy
+     * setting" and never bonded: the setting landed a millisecond later, unobserved.
+     */
+    private const val VERIFY_TIMEOUT_MS = 4_000L
+    private const val VERIFY_POLL_MS = 100L
+
+    /** Where [BondingProxy] listens; libtorrent is pointed here. */
+    private const val LOOPBACK = "127.0.0.1"
+
     private val lock = Any()
     private var manager: SessionManager? = null
     private var users = 0
@@ -53,6 +68,10 @@ object TorrentEngine {
     /** The session refused the proxy setting (verification after applySettings failed). */
     @Volatile
     private var bondingApplyFailed = false
+
+    /** A settings application + verification is running on its own thread. */
+    @Volatile
+    private var bondingApplying = false
 
     /**
      * Returns the running session, starting it if this is the first torrent.
@@ -77,6 +96,7 @@ object TorrentEngine {
                 bonded = false
                 bondingDisabled = false
                 bondingApplyFailed = false
+                bondingApplying = false
                 bonding = BondingProxy(context.applicationContext)
                 tryBonding = true
             }
@@ -107,15 +127,7 @@ object TorrentEngine {
             bonding ?: BondingProxy(context.applicationContext).also { bonding = it }
         }
 
-        proxy.startAsync { port ->
-            val stillWanted = synchronized(lock) { manager === session && !bondingDisabled }
-            if (!stillWanted) return@startAsync
-            if (applyProxySettings(session, port)) {
-                synchronized(lock) { bonded = true }
-            } else {
-                bondingApplyFailed = true
-            }
-        }
+        proxy.startAsync { port -> bondSession(session, port) }
 
         scheduleBondingRetry(context, session)
     }
@@ -142,12 +154,7 @@ object TorrentEngine {
                     val waiting = synchronized(lock) { manager === session && !bonded && !bondingDisabled }
                     if (!waiting) return@Thread
                     val proxy = synchronized(lock) { bonding } ?: return@Thread
-                    proxy.startAsync { port ->
-                        val stillWanted = synchronized(lock) { manager === session && !bondingDisabled }
-                        if (stillWanted && applyProxySettings(session, port)) {
-                            synchronized(lock) { bonded = true }
-                        }
-                    }
+                    proxy.startAsync { port -> bondSession(session, port) }
                 }
             } finally {
                 // Always release the slot, otherwise an early exit would block every later retry.
@@ -161,30 +168,87 @@ object TorrentEngine {
         thread.start()
     }
 
-    /** Points libtorrent at the loopback SOCKS5 proxy: peer and tracker TCP go through it. */
-    private fun applyProxySettings(session: SessionManager, port: Int): Boolean = runCatching {
-        val pack = SettingsPack()
+    /**
+     * Applies the proxy settings to the live session on a background thread.
+     *
+     * Called from [BondingProxy.startAsync]'s callback, which may run on the caller's thread
+     * (the main thread during app start-up), so nothing here may block it.
+     */
+    private fun bondSession(session: SessionManager, port: Int) {
+        synchronized(lock) {
+            if (manager !== session || bondingDisabled || bonded) return
+            if (bondingApplying) return
+            bondingApplying = true
+        }
+        val thread = Thread({
+            try {
+                val applied = applyProxySettings(session, port)
+                synchronized(lock) {
+                    if (manager !== session || bondingDisabled) return@Thread
+                    if (applied) {
+                        bonded = true
+                        bondingApplyFailed = false
+                    } else {
+                        bonded = false
+                        bondingApplyFailed = true
+                    }
+                }
+            } finally {
+                bondingApplying = false
+            }
+        }, "fd-bond-apply")
+        thread.isDaemon = true
+        thread.start()
+    }
+
+    /**
+     * The settings that make libtorrent send its peer and tracker connections through the
+     * loopback SOCKS5 proxy.
+     *
+     * The uTP flags are the important part. uTP is UDP, and a SOCKS5 proxy can only carry TCP:
+     * libtorrent does not route uTP through a proxy, and when it decides to use uTP for a peer
+     * (any peer that advertises uTP support - most modern clients do) it opens that connection
+     * straight out of the default network. With uTP left on, a "bonded" magnet therefore moved
+     * all of its data over one radio and the proxy saw nearly nothing. Turning uTP off while
+     * bonded forces every outgoing peer connection to be TCP, i.e. through the proxy, i.e.
+     * split over both radios.
+     */
+    private fun proxyPack(port: Int): SettingsPack = SettingsPack().also { pack ->
         pack.setInteger(
             settings_pack.int_types.proxy_type.swigValue(),
             settings_pack.proxy_type_t.socks5.swigValue(),
         )
-        pack.setString(settings_pack.string_types.proxy_hostname.swigValue(), "127.0.0.1")
+        pack.setString(settings_pack.string_types.proxy_hostname.swigValue(), LOOPBACK)
         pack.setInteger(settings_pack.int_types.proxy_port.swigValue(), port)
         pack.setBoolean(settings_pack.bool_types.proxy_peer_connections.swigValue(), true)
         pack.setBoolean(settings_pack.bool_types.proxy_tracker_connections.swigValue(), true)
         pack.setBoolean(settings_pack.bool_types.proxy_hostnames.swigValue(), true)
-        session.applySettings(pack)
+        // TCP only while bonded - see the comment above.
+        pack.setBoolean(settings_pack.bool_types.enable_outgoing_utp.swigValue(), false)
+        pack.setBoolean(settings_pack.bool_types.enable_incoming_utp.swigValue(), false)
+        pack.setBoolean(settings_pack.bool_types.enable_outgoing_tcp.swigValue(), true)
+    }
 
-        // Read it back: applySettings is asynchronous, and reporting "bonded" without checking
-        // would be another way of showing a state that is not real.
-        val applied = runCatching {
-            val live = session.settings()
-            live != null &&
-                live.getInteger(settings_pack.int_types.proxy_type.swigValue()) ==
-                settings_pack.proxy_type_t.socks5.swigValue() &&
-                live.getInteger(settings_pack.int_types.proxy_port.swigValue()) == port
-        }.getOrDefault(true)
-        applied
+    /** Applies [proxyPack] and waits (bounded) until the session reports it, then verifies. */
+    private fun applyProxySettings(session: SessionManager, port: Int): Boolean {
+        val sent = runCatching { session.applySettings(proxyPack(port)) }.isSuccess
+        if (!sent) return false
+
+        val deadline = SystemClock.elapsedRealtime() + VERIFY_TIMEOUT_MS
+        while (true) {
+            if (proxyIsLive(session, port)) return true
+            if (SystemClock.elapsedRealtime() >= deadline) return false
+            runCatching { Thread.sleep(VERIFY_POLL_MS) }
+        }
+    }
+
+    /** True when the session's live settings really describe our proxy. */
+    private fun proxyIsLive(session: SessionManager, port: Int): Boolean = runCatching {
+        val live = session.settings() ?: return@runCatching false
+        live.getInteger(settings_pack.int_types.proxy_type.swigValue()) ==
+            settings_pack.proxy_type_t.socks5.swigValue() &&
+            live.getInteger(settings_pack.int_types.proxy_port.swigValue()) == port &&
+            !live.getBoolean(settings_pack.bool_types.enable_outgoing_utp.swigValue())
     }.getOrDefault(false)
 
     /**
@@ -207,6 +271,10 @@ object TorrentEngine {
                     settings_pack.int_types.proxy_type.swigValue(),
                     settings_pack.proxy_type_t.none.swigValue(),
                 )
+                // uTP was only off because a SOCKS5 proxy cannot carry it; the plain
+                // default network can, so hand it back.
+                pack.setBoolean(settings_pack.bool_types.enable_outgoing_utp.swigValue(), true)
+                pack.setBoolean(settings_pack.bool_types.enable_incoming_utp.swigValue(), true)
                 session.applySettings(pack)
                 true
             }.getOrDefault(false)
@@ -233,13 +301,19 @@ object TorrentEngine {
     fun bondingNote(): String? = synchronized(lock) {
         val proxy = bonding
         if (!bonded && bondingApplyFailed) {
-            "bonding: unavailable - the torrent engine did not accept the proxy setting"
+            "bonding: unavailable - the torrent engine did not take the proxy setting"
         } else {
-            BondingStatus.note(
+            val note = BondingStatus.note(
                 state = bondingState(),
                 rates = if (bonded) proxy?.describe() else null,
                 reason = proxy?.unavailableReason,
             )
+            // Bonded but idle: say so instead of showing two silent zeroes.
+            if (bonded && note != null && proxy != null && proxy.stats().attempts == 0) {
+                "$note \u00b7 no peer through the proxy yet"
+            } else {
+                note
+            }
         }
     }
 

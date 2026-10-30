@@ -72,6 +72,10 @@ whichever peer answers first.
   up yet. It only steps aside when the proxy itself opened **no** peer connection across at
   least three attempts — a swarm that is merely quiet does not disable it — and the card always
   says which of those is the case
+- **while bonded the session is TCP-only.** uTP is UDP, and libtorrent neither proxies it nor
+  lets it alone: it picks uTP for every peer that supports it, and those connections would leave
+  on the default network and never touch the second radio. Bonding therefore turns uTP off and
+  hands it back when bonding is switched off
 
 Files land in **`Download/FasterDownloads`**: single files go straight in, a multi-file torrent
 gets its own folder with the structure preserved. The native engine is most of the download
