@@ -149,7 +149,15 @@ class MagnetDownloader(
                     )
                 }
             }
-            val reason = firstLine(t.message) ?: t.javaClass.simpleName
+            val reason = when (t) {
+                // A missing method in the DI/engine stack shows up as an Error, not an
+                // exception; say so plainly instead of pasting a JVM message.
+                is LinkageError ->
+                    "The torrent engine could not start on this device: " +
+                        (firstLine(t.message) ?: t.javaClass.simpleName)
+
+                else -> firstLine(t.message) ?: t.javaClass.simpleName
+            }
             return emitState {
                 it.copy(
                     phase = DownloadPhase.FAILED,
