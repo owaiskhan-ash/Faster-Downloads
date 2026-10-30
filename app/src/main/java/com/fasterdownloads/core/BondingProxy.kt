@@ -40,7 +40,21 @@ class BondingProxy(private val context: Context) {
     private class LinkState(val handle: LinkHandle) {
         val active = AtomicInteger(0)
         val bytes = AtomicLong(0L)
+
+        /** Download rate through this link, in bytes per second, smoothed over ~2 s. */
+        @Volatile
+        var rateBps: Long = 0L
     }
+
+    /** What one radio is doing right now - the numbers the download card shows. */
+    data class LinkRate(
+        val id: String,
+        val label: String,
+        val isMobile: Boolean,
+        val speedBps: Long,
+        val totalBytes: Long,
+        val connections: Int,
+    )
 
     private val lock = Any()
     private var server: ServerSocket? = null
@@ -132,7 +146,7 @@ class BondingProxy(private val context: Context) {
         }
 
         Thread({ acceptLoop(socket) }, "fd-bond-accept").apply { isDaemon = true }.start()
-        Thread({ adaptWeights() }, "fd-bond-weights").apply { isDaemon = true }.start()
+        Thread({ sampleLoop() }, "fd-bond-sample").apply { isDaemon = true }.start()
         return socket.localPort
     }
 
@@ -164,7 +178,12 @@ class BondingProxy(private val context: Context) {
         return snapshot.joinToString(" \u00b7 ") { state ->
             val connections = state.active.get()
             val label = if (state.handle.isMobile) "mobile" else "Wi-Fi"
-            "$label $connections conn" + (if (connections == 1) "" else "s")
+            val speed = formatSpeed(state.rateBps)
+            if (state.rateBps > 0L) {
+                "$label $speed ($connections)"
+            } else {
+                "$label $connections conn" + (if (connections == 1) "" else "s")
+            }
         }
     }
 
@@ -275,34 +294,63 @@ class BondingProxy(private val context: Context) {
     }
 
     /**
-     * Every few seconds, nudge the split towards the radio that is actually delivering: a link
-     * carrying twice the bytes gets roughly twice the new connections, within bounds.
+     * Samples each radio once a second: bytes moved since the last tick become a rate for the
+     * UI, and the same numbers steer the connection split every few seconds so the faster
+     * radio gets more of the new connections.
      */
-    private fun adaptWeights() {
-        var lastWifi = 0L
-        var lastMobile = 0L
+    private fun sampleLoop() {
+        var lastWifiBytes = 0L
+        var lastMobileBytes = 0L
+        var ticks = 0
         while (running) {
             try {
-                Thread.sleep(WEIGHT_INTERVAL_MS)
+                Thread.sleep(SAMPLE_INTERVAL_MS)
             } catch (interrupted: InterruptedException) {
                 return
             }
-            val snapshot = states.toList()
-            if (snapshot.size < 2) continue
-            val wifi = snapshot.firstOrNull { !it.handle.isMobile } ?: continue
-            val mobile = snapshot.firstOrNull { it.handle.isMobile } ?: continue
-            val wifiNow = wifi.bytes.get()
-            val mobileNow = mobile.bytes.get()
-            val wifiDelta = (wifiNow - lastWifi).coerceAtLeast(0L)
-            val mobileDelta = (mobileNow - lastMobile).coerceAtLeast(0L)
-            lastWifi = wifiNow
-            lastMobile = mobileNow
 
+            val snapshot = states.toList()
+            if (snapshot.isEmpty()) continue
+            val wifi = snapshot.firstOrNull { !it.handle.isMobile }
+            val mobile = snapshot.firstOrNull { it.handle.isMobile }
+
+            val wifiNow = wifi?.bytes?.get() ?: 0L
+            val mobileNow = mobile?.bytes?.get() ?: 0L
+            val wifiDelta = (wifiNow - lastWifiBytes).coerceAtLeast(0L)
+            val mobileDelta = (mobileNow - lastMobileBytes).coerceAtLeast(0L)
+            lastWifiBytes = wifiNow
+            lastMobileBytes = mobileNow
+
+            // Bytes per second for this tick, then smoothed: a single stalled tick must not
+            // make the radio look dead.
+            val perSecond = 1000.0 / SAMPLE_INTERVAL_MS.toDouble()
+            wifi?.let { link -> link.rateBps = smooth(link.rateBps, wifiDelta * perSecond) }
+            mobile?.let { link -> link.rateBps = smooth(link.rateBps, mobileDelta * perSecond) }
+
+            ticks++
+            if (ticks % WEIGHT_TICKS != 0) continue
             val total = wifiDelta + mobileDelta
             if (total < MIN_SAMPLE_BYTES) continue
             val observed = wifiDelta.toDouble() / total.toDouble()
-            // Smooth: one sample never swings the split.
             wifiShare = (wifiShare * 0.6 + observed * 0.4).coerceIn(MIN_SHARE, MAX_SHARE)
+        }
+    }
+
+    private fun smooth(previous: Long, sample: Double): Long =
+        (previous * SMOOTHING + sample * (1.0 - SMOOTHING)).toLong().coerceAtLeast(0L)
+
+    /** Per-radio rates for the download card, or an empty list when bonding is off. */
+    fun rates(): List<LinkRate> {
+        if (!running) return emptyList()
+        return states.toList().map { link ->
+            LinkRate(
+                id = link.handle.id,
+                label = link.handle.label,
+                isMobile = link.handle.isMobile,
+                speedBps = link.rateBps,
+                totalBytes = link.bytes.get(),
+                connections = link.active.get(),
+            )
         }
     }
 
@@ -341,7 +389,11 @@ class BondingProxy(private val context: Context) {
         const val LOOPBACK = "127.0.0.1"
         const val HANDSHAKE_TIMEOUT_MS = 15_000
         const val CONNECT_TIMEOUT_MS = 12_000
-        const val WEIGHT_INTERVAL_MS = 4_000L
+        const val SAMPLE_INTERVAL_MS = 1_000L
+
+        /** Connection weights are re-measured every fourth sample, i.e. every ~4 s. */
+        const val WEIGHT_TICKS = 4
+        const val SMOOTHING = 0.5
         const val BUFFER_SIZE = 16 * 1024
         const val MIN_SAMPLE_BYTES = 64L * 1024L
         const val MIN_SHARE = 0.2

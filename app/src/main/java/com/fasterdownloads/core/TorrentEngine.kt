@@ -138,6 +138,10 @@ object TorrentEngine {
     /** "Wi-Fi 12 conns · mobile 9 conns", or null when bonding is off. */
     fun bondingSummary(): String? = if (bonded) bonding?.describe() else null
 
+    /** Per-radio throughput while bonded; empty when the torrent is on one link. */
+    fun bondingRates(): List<BondingProxy.LinkRate> =
+        if (bonded) bonding?.rates().orEmpty() else emptyList()
+
     /** Called when a torrent job is done with the session. */
     fun release() {
         synchronized(lock) {

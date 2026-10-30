@@ -220,6 +220,18 @@ libtorrent --TCP--> 127.0.0.1:<port> [BondingProxy] --+--> Network(WIFI)     -> 
   `TorrentEngine.disableBonding()`, which applies `proxy_type = none` to the live session and
   says so in the card. Bonding stays off until the session restarts.
 
+### Where the per-radio numbers come from
+
+Nothing shown is estimated:
+
+* **HTTP**: each link's `LinkRuntime.bytes` is a byte counter incremented by its own workers;
+  the ticker feeds it to a `SpeedMeter` and publishes Wi-Fi and mobile rates separately
+  (`MultiPathDownloader.buildLinkProgress`).
+* **Torrents**: `BondingProxy.sampleLoop()` diffs each link's byte counter once a second,
+  smooths it (50/50 with the previous value) and stores it on the link; `LinkRate` carries it to
+  the card. The same samples steer the connection split every fourth tick.
+* **Shares**: `linkShares()` rounds the percentages so they sum to exactly 100.
+
 ## 8. Several downloads, pause, and the service
 
 `DownloadController` is the list: `StateFlow<List<DownloadUiState>>` keyed by job id, plus the

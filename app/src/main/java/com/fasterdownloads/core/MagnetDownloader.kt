@@ -253,6 +253,7 @@ class MagnetDownloader(
 
             emitState {
                 it.copy(
+                    links = bondingLinks(it.links),
                     phase = DownloadPhase.DOWNLOADING,
                     fileName = torrentName.ifBlank { it.fileName },
                     totalBytes = if (hasMetadata) totalBytes else 0L,
@@ -298,6 +299,26 @@ class MagnetDownloader(
             peers == 1 -> "Downloading from 1 peer"
             else -> "Downloading from $peers peers"
         }
+
+    /**
+     * Per-radio numbers for the card while bonded. Each entry is one physical link with the
+     * bytes it has carried and the rate the bonding proxy measured for it in the last second.
+     * With bonding off the entries are marked inactive, so the UI hides the split instead of
+     * showing two zeros.
+     */
+    private fun bondingLinks(current: List<LinkProgress>): List<LinkProgress> {
+        val rates = TorrentEngine.bondingRates()
+        if (rates.isEmpty()) return current.map { link -> link.copy(active = false, speedBps = 0L) }
+        return rates.map { rate ->
+            LinkProgress(
+                id = rate.id,
+                label = rate.label,
+                bytes = rate.totalBytes,
+                speedBps = rate.speedBps,
+                active = true,
+            )
+        }
+    }
 
     /** Shown once when a peer-less torrent falls back from bonded to the default network. */
     private fun noteBondingFallback() {
