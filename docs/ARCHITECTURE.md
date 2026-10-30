@@ -207,6 +207,12 @@ libtorrent --TCP--> 127.0.0.1:<port> [BondingProxy] --+--> Network(WIFI)     -> 
 
 * `BondingProxy.startAsync()` asks `NetworkLinks` for both radios (the cellular request can
   take seconds or time out without a SIM, hence async). It only activates with **two** links.
+* Bringing bonding up is retried, never one-shot: `TorrentEngine.acquire()` starts it for
+  *every* torrent when the session is not bonded yet, and a retry thread repeats the attempt
+  every 20 s for up to 6 rounds (`BONDING_RETRIES`). The proxy itself refuses attempts within
+  15 s of the previous one, so a missing cellular network cannot hammer `ConnectivityManager`.
+  After a successful `applySettings` the setting is read back from `session.settings()`, so
+  `bonded = true` means the engine really is proxied.
 * `TorrentEngine` then points the live session at the proxy with `applySettings` - no session
   restart, so torrents that were already running simply pick it up for new connections.
 * `pickLink()` hands each new connection to the link with the fewest open connections relative
@@ -216,9 +222,15 @@ libtorrent --TCP--> 127.0.0.1:<port> [BondingProxy] --+--> Network(WIFI)     -> 
   names are resolved through the chosen `Network`, so DNS follows the radio too.
 * DHT and UDP trackers ride the default network underneath - they are not proxyable over SOCKS5
   and they are the safety net: if the proxy were broken, discovery would still work.
-* The safety valve: a torrent that sees **zero peers for 25 s** while bonded calls
-  `TorrentEngine.disableBonding()`, which applies `proxy_type = none` to the live session and
-  says so in the card. Bonding stays off until the session restarts.
+* The safety valve fires on **proxy evidence, not on a quiet swarm**: after a 25 s grace period
+  a torrent without metadata switches back to the default network only when
+  `TorrentEngine.bondingIsFailing()` - the proxy opened no peer connection at all across at
+  least 3 attempts. DHT/tracker discovery legitimately takes 10-30 s, so a slow start alone
+  never disables bonding. The switch applies `proxy_type = none` to the live session and the
+  card says so; bonding stays off until the session restarts.
+* Failure is never silent: `BondingStatus` turns the engine state into one card line -
+  `bonding: bringing up the second radio`, `bonding: Wi-Fi ... · mobile ...`,
+  `bonding: unavailable - <reason>` or `bonding: off - the proxy opened no peers ...`.
 
 ### Where the per-radio numbers come from
 
@@ -274,6 +286,7 @@ which picks the data up again (HTTP from the journal, BitTorrent by re-checking 
 | Magnet with no peers | Fails after 180 s, reporting peers / seeds / DHT nodes |
 | Four or more downloads added | The extra ones wait as `QUEUED` and start as slots free |
 | User pauses | Engines drop their sockets, partial data + journal kept, state `PAUSED` |
-| No peer through the bonding proxy | Bonding switched off for the session after 25 s, card says so |
+| No peer through the bonding proxy | Bonding switched off for the session once 3 attempts opened zero connections; card says why |
+| Mobile data appears after launch | Bonding retried on the next torrent and every 20 s for 2 minutes |
 | Only one radio available | Proxy never starts; torrents run on the default network |
 | Magnet cancelled | torrent removed from the session, partial data kept in the torrent folder |

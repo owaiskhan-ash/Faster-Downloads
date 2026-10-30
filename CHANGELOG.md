@@ -3,6 +3,26 @@
 All notable changes to this project are documented here.
 This project follows [Semantic Versioning](https://semver.org/).
 
+## [0.9.1] - 2026-10-30
+
+### Fixed
+- **Magnet links now download bonded.** Bonding was only ever *attempted* once, when the
+  torrent session was created - and the app creates it at launch, before mobile data is
+  reachable. The attempt failed, nothing retried it, and every magnet after that ran on one
+  radio while the card had nothing to show. Bonding is now attempted for every torrent
+  (`TorrentEngine.acquire()`) and retried every 20 s for two minutes (`BONDING_RETRIES`).
+- **A quiet swarm no longer disables bonding.** The old fallback dropped the proxy whenever a
+  torrent had zero peers for 25 s - which is normal while DHT and trackers are still finding
+  the swarm. The fallback now requires the proxy itself to be broken (3 attempts, zero peer
+  connections opened).
+- **Bonding failures are visible.** The card reports `bonding: bringing up the second radio`,
+  `bonding: unavailable - <reason>` or `bonding: off - the proxy opened no peers`, instead of
+  silently showing nothing.
+- **`bonded: true` now means it.** After `applySettings` the proxy settings are read back from
+  the session; a rejected setting is reported instead of assumed to have worked.
+- Proxy start attempts are cooldown-gated (15 s) and idempotent, so retries cannot stack up
+  background threads or repeated `requestNetwork` calls.
+
 ## [0.9.0] - 2026-10-30
 
 ### Added

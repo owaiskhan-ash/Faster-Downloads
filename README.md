@@ -120,9 +120,13 @@ LibreTorrent, FrostWire and TorrDroid use.
   SOCKS5 proxy the app runs (`BondingProxy`), which dials each connection on Wi-Fi or on mobile
   data. A swarm holds dozens of connections, so half land on each radio and the torrent's speed
   is the sum of the two links — the same idea as the HTTP split, per connection instead of per
-  byte range. If a torrent reaches no peer that way, bonding is switched off for the session and
-  it continues on the default network; DHT and UDP trackers were never proxied, so discovery
-  keeps working either way
+  byte range. Turning bonding on is **retried, not one-shot**: it is attempted for every torrent
+  and re-attempted every 20 s for two minutes, because the session is created at launch when
+  mobile data is often not up yet. Bonding only steps aside when the proxy itself opened **no**
+  peer connection across at least three attempts — a swarm that is merely quiet for half a
+  minute no longer disables it — and it then continues on the default network. DHT and UDP
+  trackers were never proxied, so discovery keeps working either way, and the card always says
+  which of these is the case
 
 Everything lands in the app's own folder, **`Download/FasterDownloads`**:
 
@@ -162,6 +166,12 @@ you can tell those cases apart.
 
 **`HTTP 416` or "The server ignored the Range header"** - the file changed size on the
 server, or ranges are not really supported. Start the download again.
+
+**A magnet card says `bonding: unavailable - ...`** - the rest of the line is the reason: mobile
+data was not reachable (no SIM, mobile data off, carrier refused the request), so there was
+nothing to bond and the torrent runs on the radio it has. `bonding: off - the proxy opened no
+peers` is the deliberate fallback: the proxy failed to open a single peer connection, so the
+torrent was moved back to the default network instead of being left with a dead proxy.
 
 **A link row turns red and "Bonded" becomes "Single link"** - that radio was retired after
 repeated failures (blocked IP, no data left, carrier 403) so the transfer could still finish

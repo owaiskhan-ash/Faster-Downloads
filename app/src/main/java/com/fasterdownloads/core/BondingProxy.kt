@@ -2,6 +2,7 @@ package com.fasterdownloads.core
 
 import android.content.Context
 import android.net.NetworkCapabilities
+import android.os.SystemClock
 import java.io.IOException
 import java.io.InputStream
 import java.io.OutputStream
@@ -69,8 +70,25 @@ class BondingProxy(private val context: Context) {
     @Volatile
     private var running = false
 
+    /** A start attempt is in flight (asking ConnectivityManager for two networks takes time). */
     @Volatile
-    private var startAttempted = false
+    private var starting = false
+
+    /** When the last attempt began, so failed attempts retry on a cooldown instead of spinning. */
+    @Volatile
+    private var lastAttemptAt = 0L
+
+    /** Why the proxy could not come up, in words for the download card. */
+    @Volatile
+    var unavailableReason: String? = null
+        private set
+
+    // Health of the proxy itself: how many peer connections it was asked to open, and how many
+    // it managed. This is what decides whether bonding is the thing that is broken - a quiet
+    // swarm must never be mistaken for a broken proxy.
+    private val attempts = AtomicInteger(0)
+    private val successes = AtomicInteger(0)
+    private val failures = AtomicInteger(0)
 
     /** Port the proxy is listening on, or null when it is not running. */
     val port: Int?
@@ -87,21 +105,45 @@ class BondingProxy(private val context: Context) {
      * is nothing to bond and the proxy is not used at all.
      */
     fun startAsync(onReady: (Int) -> Unit) {
+        var alreadyRunning: Int? = null
         synchronized(lock) {
             if (running) {
-                server?.let { onReady(it.localPort) }
-                return
+                alreadyRunning = server?.localPort
+            } else {
+                if (starting) return
+                val now = SystemClock.elapsedRealtime()
+                if (now - lastAttemptAt < RETRY_COOLDOWN_MS) return
+                lastAttemptAt = now
+                starting = true
             }
-            if (startAttempted) return
-            startAttempted = true
+        }
+        // Callbacks are invoked outside the lock: they apply settings to the torrent session.
+        alreadyRunning?.let { ready ->
+            onReady(ready)
+            return
         }
         val thread = Thread({
             val ready = runCatching { startNow() }.getOrNull()
+            synchronized(lock) { starting = false }
             if (ready != null) runCatching { onReady(ready) }
         }, "fd-bond-start")
         thread.isDaemon = true
         thread.start()
     }
+
+    fun isRunning(): Boolean = running
+
+    fun isStarting(): Boolean = starting
+
+    /** Attempted / successful / failed peer connections through the proxy. */
+    fun stats(): Stats = Stats(
+        attempts = attempts.get(),
+        successes = successes.get(),
+        failures = failures.get(),
+        running = running,
+    )
+
+    data class Stats(val attempts: Int, val successes: Int, val failures: Int, val running: Boolean)
 
     private fun startNow(): Int? {
         val linkSource = NetworkLinks(context)
@@ -121,7 +163,11 @@ class BondingProxy(private val context: Context) {
         if (wifi == null || mobile == null) {
             // Nothing to bond. Release whatever came back and leave the session alone.
             linkSource.release()
-            synchronized(lock) { startAttempted = false }
+            unavailableReason = when {
+                wifi == null && mobile == null -> "neither Wi-Fi nor mobile data is reachable"
+                mobile == null -> "mobile data is not reachable right now"
+                else -> "Wi-Fi is not reachable right now"
+            }
             return null
         }
 
@@ -129,7 +175,7 @@ class BondingProxy(private val context: Context) {
             ServerSocket(0, 128, InetAddress.getByName(LOOPBACK))
         } catch (t: Throwable) {
             linkSource.release()
-            synchronized(lock) { startAttempted = false }
+            unavailableReason = "the local proxy port could not be opened"
             return null
         }
 
@@ -139,6 +185,7 @@ class BondingProxy(private val context: Context) {
             states.add(LinkState(wifi))
             states.add(LinkState(mobile))
             server = socket
+            unavailableReason = null
             pool = Executors.newCachedThreadPool { runnable ->
                 Thread(runnable, "fd-bond-worker").apply { isDaemon = true }
             }
@@ -162,7 +209,7 @@ class BondingProxy(private val context: Context) {
             links = null
             pool = null
             running = false
-            startAttempted = false
+            starting = false
             states.clear()
         }
         runCatching { socket?.close() }
@@ -234,11 +281,14 @@ class BondingProxy(private val context: Context) {
             }
             state = chosen
 
+            attempts.incrementAndGet()
             upstream = connect(chosen, target)
             if (upstream == null) {
+                failures.incrementAndGet()
                 Socks5.writeReply(output, Socks5.REP_HOST_UNREACHABLE)
                 return
             }
+            successes.incrementAndGet()
             upstream.tcpNoDelay = true
             client.soTimeout = 0
             Socks5.writeReply(output, Socks5.REP_SUCCESS)
@@ -390,6 +440,9 @@ class BondingProxy(private val context: Context) {
         const val HANDSHAKE_TIMEOUT_MS = 15_000
         const val CONNECT_TIMEOUT_MS = 12_000
         const val SAMPLE_INTERVAL_MS = 1_000L
+
+        /** A failed start waits this long before asking ConnectivityManager again. */
+        const val RETRY_COOLDOWN_MS = 15_000L
 
         /** Connection weights are re-measured every fourth sample, i.e. every ~4 s. */
         const val WEIGHT_TICKS = 4

@@ -242,8 +242,12 @@ class MagnetDownloader(
             val finished = runCatching { status.isFinished() }.getOrDefault(false) ||
                 (hasMetadata && totalBytes > 0L && done >= totalBytes)
 
-            if (!hasMetadata && peers <= 0 && elapsed > BONDING_GRACE_MS &&
-                TorrentEngine.isBonded() && TorrentEngine.disableBonding()
+            // Fall back only when the proxy itself has failed to open any peer connection.
+            // A swarm that is simply quiet for half a minute is not evidence of a broken proxy,
+            // and that misreading is what used to disable bonding for healthy sessions.
+            if (!hasMetadata && elapsed > BONDING_GRACE_MS &&
+                TorrentEngine.isBonded() && TorrentEngine.bondingIsFailing() &&
+                TorrentEngine.disableBonding()
             ) {
                 noteBondingFallback()
             }
@@ -347,8 +351,9 @@ class MagnetDownloader(
         if (seeds > 0) parts += "$seeds seed" + (if (seeds == 1) "" else "s")
         val trackers = magnet.trackers.size + extras.size
         if (trackers > 0) parts += "$trackers tracker" + (if (trackers == 1) "" else "s")
-        val bonding = TorrentEngine.bondingSummary()
-        if (bonding != null) parts += "bonded: $bonding"
+        // One line that always tells the truth about the two radios: bonded, still starting,
+        // unavailable (with the reason) or switched off.
+        TorrentEngine.bondingNote()?.let { note -> parts += note }
         return parts.joinToString(" \u00b7 ")
     }
 
