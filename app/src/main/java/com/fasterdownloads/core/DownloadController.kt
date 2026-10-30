@@ -25,6 +25,12 @@ object DownloadController {
 
     private val sequence = AtomicInteger(0)
 
+    /**
+     * Guards the list. Three engines publish progress every 500 ms from their own threads, so
+     * read-modify-write on [mutable] has to be atomic or an update would be lost.
+     */
+    private val lock = Any()
+
     /** Creates a job in [DownloadPhase.QUEUED] and returns its id. */
     fun add(request: DownloadRequest): String {
         val id = "job-${System.currentTimeMillis()}-${sequence.incrementAndGet()}"
@@ -36,7 +42,7 @@ object DownloadController {
             fileName = request.fileName,
             message = "Waiting to start",
         )
-        mutable.value = listOf(queued) + mutable.value
+        synchronized(lock) { mutable.value = listOf(queued) + mutable.value }
         return id
     }
 
@@ -47,31 +53,39 @@ object DownloadController {
     /** Replaces the snapshot with this id, or appends it when the id is new. */
     fun update(state: DownloadUiState) {
         if (state.id.isBlank()) return
-        val current = mutable.value
-        val index = current.indexOfFirst { it.id == state.id }
-        mutable.value = if (index >= 0) {
-            current.toMutableList().also { it[index] = state }
-        } else {
-            listOf(state) + current
+        synchronized(lock) {
+            val current = mutable.value
+            val index = current.indexOfFirst { it.id == state.id }
+            mutable.value = if (index >= 0) {
+                current.toMutableList().also { it[index] = state }
+            } else {
+                listOf(state) + current
+            }
         }
     }
 
     /** Forgets a job entirely (used by the Remove button). */
     fun remove(id: String) {
-        requests.remove(id)
-        mutable.value = mutable.value.filterNot { it.id == id }
+        synchronized(lock) {
+            requests.remove(id)
+            mutable.value = mutable.value.filterNot { it.id == id }
+        }
     }
 
     /** Drops everything that is finished, without touching running jobs. */
     fun clearFinished() {
-        val removed = mutable.value.filter { it.terminal }.map { it.id }
-        removed.forEach { requests.remove(it) }
-        mutable.value = mutable.value.filterNot { it.terminal }
+        synchronized(lock) {
+            val removed = mutable.value.filter { it.terminal }.map { it.id }
+            removed.forEach { requests.remove(it) }
+            mutable.value = mutable.value.filterNot { it.terminal }
+        }
     }
 
     fun reset() {
-        requests.clear()
-        mutable.value = emptyList()
+        synchronized(lock) {
+            requests.clear()
+            mutable.value = emptyList()
+        }
     }
 
     // ---- URLs handed to us by other apps (magnet links, share sheet) ----
