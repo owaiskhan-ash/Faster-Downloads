@@ -6,6 +6,8 @@ import bt.Bt
 import bt.data.file.FileSystemStorage
 import bt.dht.DHTConfig
 import bt.dht.DHTModule
+import bt.magnet.MagnetUri
+import bt.metainfo.TorrentId
 import bt.runtime.BtClient
 import bt.runtime.Config
 import bt.torrent.TorrentSessionState
@@ -58,9 +60,26 @@ class MagnetDownloader(
     override fun run(): DownloadUiState {
         val targetDir = Storage.torrentDir(context)
         var watchdog: Thread? = null
+        // Files already sitting in the torrent folder from earlier downloads: only the new
+        // ones belong to this torrent when it is time to publish.
+        val existing = targetDir.walkTopDown().filter { it.isFile }.map { it.absolutePath }.toSet()
         try {
+            // Parsed and decoded here, not by the swarm engine: bt 1.10 never percent-decodes
+            // `tr` parameters, so a standard magnet makes it throw "Invalid URL" before a
+            // single peer is contacted. See MagnetLink.
+            val magnet = MagnetLink.parse(request.url)
+            torrentName = magnet.displayName?.let { Storage.sanitizeFileName(it) } ?: torrentName
+
             emitState {
-                it.copy(phase = DownloadPhase.PREPARING, message = "Joining the swarm...")
+                it.copy(
+                    phase = DownloadPhase.PREPARING,
+                    fileName = torrentName.ifBlank { it.fileName },
+                    message = if (magnet.trackers.isEmpty()) {
+                        "No usable trackers in the link - joining the swarm over DHT..."
+                    } else {
+                        "Joining the swarm: ${magnet.trackers.size} trackers + DHT..."
+                    },
+                )
             }
 
             // Hashing runs in parallel with the transfer, so give it a few threads.
@@ -75,7 +94,7 @@ class MagnetDownloader(
             val built = Bt.client()
                 .config(config)
                 .storage(FileSystemStorage(targetDir.toPath()))
-                .magnet(request.url.trim())
+                .magnet(magnet.toBtMagnetUri())
                 .autoLoadModules()
                 .module(dhtModule)
                 .stopWhenDownloaded()
@@ -119,7 +138,7 @@ class MagnetDownloader(
                     )
                 }
             }
-            return finish(targetDir)
+            return finish(targetDir, existing)
         } catch (t: Throwable) {
             if (cancelled.get()) {
                 return emitState {
@@ -135,7 +154,11 @@ class MagnetDownloader(
                 it.copy(
                     phase = DownloadPhase.FAILED,
                     error = reason,
-                    message = "Torrent download failed",
+                    message = if (t is MagnetFormatException) {
+                        "That magnet link could not be read"
+                    } else {
+                        "Torrent download failed"
+                    },
                 )
             }
         } finally {
@@ -190,8 +213,10 @@ class MagnetDownloader(
                             it.copy(
                                 phase = DownloadPhase.FAILED,
                                 message = "Torrent download failed",
-                                error = "No peer returned the torrent metadata. Check the " +
-                                    "magnet link, and that DHT or a tracker is reachable.",
+                                error = "No peer returned the torrent metadata within two " +
+                                    "minutes. The swarm may have no seeders left, or this " +
+                                    "network may block peer traffic (try Wi-Fi instead of " +
+                                    "mobile data, or vice versa).",
                             )
                         }
                         runCatching { client?.stop() }
@@ -211,13 +236,16 @@ class MagnetDownloader(
         return thread
     }
 
-    private fun finish(dir: File): DownloadUiState {
+    private fun finish(dir: File, existing: Set<String>): DownloadUiState {
         emitState {
             it.copy(phase = DownloadPhase.FINALIZING, message = "Verifying torrent data...")
         }
 
-        val files = runCatching { dir.walkTopDown().filter { it.isFile }.toList() }
-            .getOrDefault(emptyList())
+        val files = runCatching {
+            dir.walkTopDown()
+                .filter { it.isFile && it.absolutePath !in existing }
+                .toList()
+        }.getOrDefault(emptyList())
         val single = files.singleOrNull()
 
         if (single != null) {
@@ -256,6 +284,18 @@ class MagnetDownloader(
         val next = synchronized(stateLock) { block(state).also { state = it } }
         runCatching { emit(next) }
         return next
+    }
+
+    /**
+     * Turns the parsed link into the object the engine actually wants. Passing a
+     * [MagnetUri] (instead of the raw string) is what keeps the decoded tracker URLs out of
+     * `MagnetUriParser`, which would otherwise re-break them.
+     */
+    private fun MagnetLink.toBtMagnetUri(): MagnetUri {
+        val builder = MagnetUri.torrentId(TorrentId.fromBytes(infoHashBytes))
+        displayName?.let { name -> builder.name(name) }
+        trackers.forEach { url -> builder.tracker(url) }
+        return builder.buildUri()
     }
 
     private companion object {

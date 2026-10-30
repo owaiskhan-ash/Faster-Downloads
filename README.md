@@ -75,7 +75,8 @@ More detail: [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
 ## Features
 
 - Highlighter-neon UI with hairline outlines, black ink and thin type
-- **Dark mode inverts the palette**: black canvas with neon elements, following the system theme
+- **Day / night switch in the header**: inverts the palette (black canvas, neon elements) and
+  remembers the choice; until it is used, the app follows the system setting
 - **Magnet links**: `magnet:?xt=urn:btih:...` downloads over BitTorrent (DHT + trackers),
   and the app registers as a magnet handler so links open straight from the browser
 - Windowed (3 s) speed and ETA readout, so the number is readable instead of jittery
@@ -93,6 +94,10 @@ More detail: [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
 Paste a `magnet:` URI — or tap one in a browser / share it to the app — and the BitTorrent
 engine takes over, powered by [atomashpolskiy/bt](https://github.com/atomashpolskiy/bt):
 
+- magnet links are parsed and *decoded* by the app before the engine sees them: `bt` 1.10
+  never percent-decodes `tr` parameters, so a standard link (`tr=udp%3A%2F%2F...`) would die
+  with "Invalid URL" and lose every tracker. HTML-escaped (`&amp;`) and autolinked
+  (`[2Ftracker](http://2Ftracker)`) links are repaired too
 - metadata is fetched from the swarm first (BEP-9), then the file name and size appear
 - DHT (BEP-5), HTTP/UDP trackers, PEX and encryption are handled by the library
 - progress, peers and ETA show in the same card; the live notification is shared with HTTP jobs

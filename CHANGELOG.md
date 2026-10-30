@@ -3,6 +3,28 @@
 All notable changes to this project are documented here.
 This project follows [Semantic Versioning](https://semver.org/).
 
+## [0.4.0] - 2026-10-30
+
+### Added
+- **Day / night switch in the header.** Two-segment pill at the top right flips the whole app
+  between the neon canvas and the black one, and the choice is persisted
+  (`ThemePreference`); until it is used the app keeps following the system setting.
+
+### Fixed
+- **Magnet links failed with an error instead of downloading.** `bt` 1.10 never
+  percent-decodes magnet `tr` parameters, and `TrackerService.getProtocol()` looks for a
+  literal `://`, so a standard link (`tr=udp%3A%2F%2Ftracker...`) threw
+  `Invalid URL: udp%3A%2F%2F...` before a single peer was contacted. Links are now parsed by
+  `MagnetLink` — info-hash (hex *or* base32), name and trackers are decoded here, unusable
+  schemes are dropped, and the engine is handed a `MagnetUri` object so its string parser
+  never runs. HTTP, HTTPS and UDP trackers all work now.
+- Magnet input is sanitised first: HTML escapes (`&amp;`), markdown autolinks
+  (`[2Ftracker](http://2Ftracker)`), quotes and line breaks are repaired, and a link that
+  still has no usable info-hash gets a plain-language error instead of a stack-trace string.
+- The torrent folder is diffed before and after a download, so publishing can no longer pick
+  up a file left over from an earlier torrent.
+- Metadata timeout message now says what to try (seeders, Wi-Fi vs mobile data).
+
 ## [0.3.0] - 2026-10-30
 
 ### Changed
