@@ -40,7 +40,7 @@ class TrackerProbeTest {
 
     @Test
     fun parsesDictionaryPeers() {
-        val body = "d5:peersld2:ip9:10.0.0.14:porti51413eeee".toByteArray()
+        val body = "d5:peersld2:ip8:10.0.0.14:porti51413eeee".toByteArray()
 
         val peers = TrackerProbe.parsePeers(body)
 
