@@ -50,8 +50,9 @@ flowchart LR
    which is Android's equivalent of `SO_BINDTODEVICE`: DNS and TCP traffic for that
    connection leave through that network only.
 3. **Range splitting.** The file is probed with `Range: bytes=0-0` to learn its size and
-   whether the server honours ranges. It is then cut into 256 KB – 8 MB chunks that all
-   land in one shared work queue.
+   whether the server honours ranges. It is then cut into 1 MB – 16 MB chunks (about six
+   per worker, so a TLS handshake is never a measurable share of a request) that all land
+   in one shared work queue.
 4. **Weighted, adaptive workers.** Each radio gets a share of the worker threads
    (default 70 % Wi-Fi / 30 % mobile). Every 4 s the app compares measured throughput
    against the requested split and hands the faster radio an extra worker if it is
@@ -71,6 +72,8 @@ More detail: [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
 
 ## Features
 
+- Highlighter-neon UI with hairline outlines, black ink and thin type
+- Windowed (3 s) speed and ETA readout, so the number is readable instead of jittery
 - Bonded Wi-Fi + mobile-data download with a configurable Wi-Fi share (50–90 %)
 - 1–8 parallel connections per network, shared work queue with retry
 - Adaptive weighting driven by real per-link throughput

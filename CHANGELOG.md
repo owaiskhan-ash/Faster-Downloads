@@ -3,6 +3,23 @@
 All notable changes to this project are documented here.
 This project follows [Semantic Versioning](https://semver.org/).
 
+## [0.1.2] - 2026-10-30
+
+### Changed
+- New look: highlighter-neon canvas with black ink, hairline outlined sections, thin
+  typography with wide letterspacing, black-filled primary buttons and neon system bar
+  icons. The app is intentionally single-theme now.
+- Removed the "Good to know" card from the home screen.
+
+### Fixed
+- Speed and ETA readouts no longer flicker or appear to drop: they are computed over a
+  sliding 3 s window (`SpeedMeter`) rather than from 450 ms deltas.
+- Steadier throughput on large files: chunk size floor raised to 1 MB and ceiling to 16 MB
+  (~6 chunks per worker), so each range request amortises its TLS handshake instead of
+  paying it every 256 KB.
+- Worker adaptation is less twitchy: it runs every 6 s, needs a 15 % deviation from the
+  target split, and stops adding connections once the queue is nearly drained.
+
 ## [0.1.1] - 2026-10-30
 
 ### Fixed

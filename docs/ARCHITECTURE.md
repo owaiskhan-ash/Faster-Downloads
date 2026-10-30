@@ -52,13 +52,14 @@ address wire bytes, never gzipped bytes), and applies sane timeouts.
 `ChunkPlan` then picks a chunk size:
 
 ```
-targetChunks = max(workers * 10, 16)
-chunkSize    = clamp(total / targetChunks, 256 KB, 8 MB)   # and <= 4000 chunks/file
+targetChunks = max(workers * 6, 12)
+chunkSize    = clamp(total / targetChunks, 1 MB, 16 MB)    # and <= 4000 chunks/file
 ```
 
-Small chunks matter: they let a fast radio drain work that a slow radio has not claimed
-yet. The upper bound keeps per-request overhead (TLS handshakes on a fresh connection)
-amortised.
+Chunks are deliberately few and large: every range request opens a fresh connection (so a
+fresh TLS handshake), and 256 KB chunks made handshake latency a visible part of the
+transfer. Six chunks per worker still lets a fast radio drain work the slow radio has not
+claimed, while the tail stays at one chunk per worker.
 
 ## 4. Concurrency model
 
@@ -97,8 +98,10 @@ amortised.
 
 - `doneBytes` is incremented as bytes hit the disk and rolled back when a chunk attempt
   fails, so retries never inflate progress.
-- A daemon ticker emits a `DownloadUiState` snapshot every 450 ms with total/per-link speed
-  and ETA. The service turns that into throttled notification updates; Compose observes the
+- A daemon ticker emits a `DownloadUiState` snapshot every 450 ms. Speeds come from
+  `SpeedMeter`, a 3 s sliding window: instantaneous deltas swing wildly with chunk
+  boundaries and write flushes, whereas the windowed average is stable and still reacts to
+  real changes within a few seconds. ETA is derived from that smoothed speed. The service turns that into throttled notification updates; Compose observes the
   same `StateFlow`.
 
 ## 6. Resume journal

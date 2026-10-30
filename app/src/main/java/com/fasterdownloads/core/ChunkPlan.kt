@@ -10,15 +10,17 @@ package com.fasterdownloads.core
  */
 object ChunkPlan {
 
-    const val MIN_CHUNK = 256L * 1024L
-    const val MAX_CHUNK = 8L * 1024L * 1024L
+    const val MIN_CHUNK = 1L * 1024L * 1024L
+    const val MAX_CHUNK = 16L * 1024L * 1024L
     const val MAX_CHUNKS = 4000L
 
     /** Picks a chunk size that keeps every worker busy without flooding the server. */
     fun chunkSize(totalBytes: Long, workers: Int): Long {
         if (totalBytes <= 0L) return MIN_CHUNK
         val budget = workers.coerceAtLeast(2).toLong()
-        val targetChunks = (budget * 10L).coerceAtLeast(16L)
+        // ~6 chunks per worker: enough to load-balance, few enough that a TLS handshake
+        // per request does not eat a measurable share of the transfer.
+        val targetChunks = (budget * 6L).coerceAtLeast(12L)
         val byWorker = totalBytes / targetChunks
         val byCount = totalBytes / MAX_CHUNKS
         return byWorker.coerceAtLeast(byCount).coerceAtLeast(MIN_CHUNK).coerceAtMost(MAX_CHUNK)
