@@ -47,6 +47,21 @@ data class MagnetLink(
     val label: String
         get() = displayName?.takeIf { it.isNotBlank() } ?: infoHashHex.take(8).uppercase()
 
+    /**
+     * Rebuilds a clean `magnet:` URI from the parsed link.
+     *
+     * The engine is handed this instead of the text the user pasted, so a link that was
+     * mangled on its way here (`&amp;` escapes, markdown autolinks, smart quotes, line
+     * breaks) never reaches libtorrent's parser. Every value is percent-encoded again, so
+     * trackers with their own query strings survive the round trip.
+     */
+    fun toMagnetUri(): String {
+        val parts = mutableListOf("xt=urn:btih:$infoHashHex")
+        displayName?.takeIf { it.isNotBlank() }?.let { name -> parts += "dn=${percentEncode(name)}" }
+        trackers.forEach { url -> parts += "tr=${percentEncode(url)}" }
+        return parts.joinToString(separator = "&", prefix = "magnet:?")
+    }
+
     companion object {
 
         private const val SCHEME = "magnet:"
@@ -130,6 +145,25 @@ data class MagnetLink(
                     "40 hex characters nor 32 base32 characters.",
             )
         }
+
+        /** RFC 3986 unreserved characters pass through; everything else becomes `%XX`. */
+        internal fun percentEncode(value: String): String {
+            val out = StringBuilder(value.length)
+            for (byte in value.toByteArray(Charsets.UTF_8)) {
+                val code = byte.toInt() and 0xFF
+                val char = code.toChar()
+                val unreserved = char in 'A'..'Z' || char in 'a'..'z' || char in '0'..'9' ||
+                    char == '-' || char == '.' || char == '_' || char == '~'
+                if (unreserved) {
+                    out.append(char)
+                } else {
+                    out.append('%').append(HEX_DIGITS[code shr 4]).append(HEX_DIGITS[code and 0x0F])
+                }
+            }
+            return out.toString()
+        }
+
+        private const val HEX_DIGITS = "0123456789ABCDEF"
 
         /**
          * Forgiving percent-decoding: works on bytes so UTF-8 names survive, and leaves a

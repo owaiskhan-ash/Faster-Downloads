@@ -156,21 +156,39 @@ overwritten in place — resume needs no re-download of the whole file.
 
 ## 7b. Torrent engine
 
-`magnet:` links are handled by `MagnetDownloader`, which wraps the `bt` library
-(`bt-core` + `bt-dht` + `bt-http-tracker-client`):
+`magnet:` links are handled by `MagnetDownloader`, which wraps **libtorrent** through
+libtorrent4j (`org.libtorrent4j:libtorrent4j:2.1.0-38` plus the `-android-arm64` /
+`-android-arm` jars that carry `libtorrent4j.so`). libtorrent is the engine every working
+Android client ships; a Java-only BitTorrent implementation cannot speak BEP-15 (UDP
+trackers), which is what most public trackers speak.
 
 | Step | Call |
 | --- | --- |
-| Build the client | `Bt.client().config(...).storage(FileSystemStorage(dir)).magnet(uri).autoLoadModules().module(DHTModule(...)).stopWhenDownloaded()` |
-| Metadata | `afterTorrentFetched { torrent -> name, size }` (BEP-9) |
-| Progress | `startAsync({ state -> ... }, 500)` -> `getDownloaded()`, `getLeft()`, `getConnectedPeers()` |
-| Cancel | `client.stop()` |
+| Rebuild the link | `MagnetLink.parse(raw).toMagnetUri()` - decoded, de-duplicated, re-encoded |
+| Start the engine | `SessionManager().start()` - DHT bootstrap, alert loop, tracker/DHT/LSD/PeX managers, µTP |
+| Add the torrent | `session.download(magnetUri, Storage.torrentDir(ctx), TorrentFlags.AUTO_MANAGED)` |
+| Find the handle | `session.find(Sha1Hash.parseHex(infoHash))` (adds are async, so this is polled) |
+| Progress | `TorrentHandle.status()` every 500 ms: `hasMetadata()`, `totalWanted()`, `totalWantedDone()`, `numPeers()`, `numSeeds()`, `downloadPayloadRate()`, `isFinished()` |
+| Diagnostics | `session.dhtNodes()` + peer/seed/tracker counts, rendered under the progress card |
+| Cancel | `handle.pause()` from the caller, `session.stop()` from the engine thread in `finally` |
 
-`SpeedMeter` smooths `getDownloaded()` deltas exactly like the HTTP engine, and the
-remaining bytes come from `Torrent.getSize() - getLeft()`. A watchdog fails the job with a
-readable message if no peer returns metadata within two minutes, because a magnet with no
-seeders otherwise waits forever. Single-file payloads are published through the same
-MediaStore path as HTTP downloads; multi-file payloads stay in the torrent folder.
+`downloadPayloadRate()` is already smoothed inside libtorrent, so the speed shown does not
+flicker between ticks (the HTTP engine's `SpeedMeter` is unnecessary here). `hasMetadata()`
+gates the total: before it is true the transfer is indeterminate and the UI shows a spinner
+with "Looking for peers to fetch the metadata from...".
+
+Three collisions with reality are handled explicitly:
+
+* **Silent magnets.** If no peer returns metadata within 180 s, the job fails with the live
+  engine numbers (peers, seeds, DHT nodes, trackers) instead of waiting forever.
+* **Dead swarms.** Metadata that arrives but never produces a byte for 8 minutes fails with
+  "no peer is uploading to this device".
+* **Missing native library.** `LinkageError` / `UnsatisfiedLinkError` is reported as "the
+  torrent engine could not start on this device", never as a download error. CI verifies the
+  `.so` is present for every ABI in `abiFilters`, because that failure only shows up on device.
+
+Single-file payloads are published through the same MediaStore path as HTTP downloads;
+multi-file payloads stay in the torrent folder. The APK grows by roughly 12 MB.
 
 ## 8. Foreground service
 
@@ -192,5 +210,5 @@ blocked read fails instantly instead of waiting for its timeout.
 | Disk full | Positional write throws, abort with the failing offset |
 | User cancels | Sockets dropped, journal written, `CANCELLED` state, partial kept for resume |
 | Process killed | Journal + `.part` survive; a new run resumes |
-| Magnet with no peers | Metadata watchdog fails the job after 120 s with a hint |
-| Magnet cancelled | `client.stop()`, partial data stays and is re-verified on the next run |
+| Magnet with no peers | Fails after 180 s, reporting peers / seeds / DHT nodes |
+| Magnet cancelled | `session.stop()`, partial data stays in the torrent folder |

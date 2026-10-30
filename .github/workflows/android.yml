@@ -69,22 +69,21 @@ jobs:
         run: |
           APK=$(ls app/build/outputs/apk/release/*.apk | head -1)
           BT=$(ls -d "$ANDROID_HOME"/build-tools/*/ | sort -V | tail -1)
-          # Guice 5 ships BindingSourceRestriction, which calls
-          # Class.getAnnotatedSuperclass() - a method Android's java.lang.Class simply does
-          # not implement. It kills every magnet download with NoSuchMethodError, so treat
-          # any trace of it in the APK as a build failure.
-          if unzip -p "$APK" 'classes*.dex' | grep -aq "BindingSourceRestriction"; then
-            echo "::error::Guice 5 leaked into the APK (BindingSourceRestriction is Android-incompatible)"
-            exit 1
-          fi
-          # Guice 4's cglib FastClass generation cannot work on Android either.
-          if unzip -p "$APK" 'classes*.dex' | grep -aq "com/google/inject/internal/cglib"; then
-            echo "::error::Guice cglib is in the APK; it generates classes at runtime, which Android refuses (Unable to load cache item)"
-            exit 1
-          fi
-          # ...and the 4.x replacement must be there, or bt's modules cannot be installed.
-          if ! unzip -p "$APK" 'classes*.dex' | grep -aq "Lcom/google/inject/multibindings/Multibinder;"; then
-            echo "::error::guice-multibindings is missing from the APK; bt installs its modules with Multibinder"
+          # The BitTorrent engine is native now (libtorrent via libtorrent4j). A missing or
+          # mismatched .so is the one failure mode that only shows up on a device, as
+          # UnsatisfiedLinkError, so the build verifies the library is inside the APK for
+          # every ABI declared in abiFilters.
+          for ABI in arm64-v8a armeabi-v7a; do
+            if ! unzip -l "$APK" | grep -q "lib/$ABI/libtorrent4j.so"; then
+              echo "::error::libtorrent4j.so is missing for $ABI; magnet downloads would fail with UnsatisfiedLinkError"
+              exit 1
+            fi
+          done
+          # The SWIG binding and the native library must come from the same release.
+          if unzip -p "$APK" 'classes*.dex' | grep -aq "org/libtorrent4j/swig/libtorrent_jni" ; then
+            echo "libtorrent4j SWIG binding present"
+          else
+            echo "::error::libtorrent4j Java bindings are not in the APK"
             exit 1
           fi
           {
@@ -186,7 +185,8 @@ jobs:
           * Browser-style request headers (User-Agent, Referer), a shared cookie jar across
             both radios, and a plain-GET fallback so hosts that reject app-shaped or ranged
             requests no longer fail with \`HTTP 403\`.
-          * Downloads \`magnet:\` links over BitTorrent (DHT + trackers) and opens them
+          * Downloads \`magnet:\` links on **libtorrent** (the native engine behind
+            LibreTorrent/TorrDroid): UDP + HTTP trackers, DHT, PeX, LSD and µTP, opened
             straight from a browser or the share sheet.
           * Light and dark mode: neon-on-black inverts to black-on-neon with the system theme.
           * Resumes interrupted transfers chunk-by-chunk and verifies the finished file.

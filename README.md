@@ -77,8 +77,9 @@ More detail: [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
 - Highlighter-neon UI with hairline outlines, black ink and thin type
 - **Day / night switch in the header**: inverts the palette (black canvas, neon elements) and
   remembers the choice; until it is used, the app follows the system setting
-- **Magnet links**: `magnet:?xt=urn:btih:...` downloads over BitTorrent (DHT + trackers),
-  and the app registers as a magnet handler so links open straight from the browser
+- **Magnet links**: `magnet:?xt=urn:btih:...` downloads on libtorrent (UDP/HTTP trackers,
+  DHT, PeX, µTP), and the app registers as a magnet handler so links open straight from the
+  browser
 - Windowed (3 s) speed and ETA readout, so the number is readable instead of jittery
 - Bonded Wi-Fi + mobile-data download with a configurable Wi-Fi share (50–90 %)
 - 1–8 parallel connections per network, shared work queue with retry
@@ -91,27 +92,29 @@ More detail: [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
 
 ## Torrents (magnet links)
 
-Paste a `magnet:` URI — or tap one in a browser / share it to the app — and the BitTorrent
-engine takes over, powered by [atomashpolskiy/bt](https://github.com/atomashpolskiy/bt):
+Paste a `magnet:` URI — or tap one in a browser / share it to the app — and the download runs
+on **[libtorrent](https://github.com/arvidn/libtorrent)** through
+[libtorrent4j](https://github.com/aldenml/libtorrent4j): the native C++ BitTorrent engine that
+LibreTorrent, FrostWire and TorrDroid use.
 
-- magnet links are parsed and *decoded* by the app before the engine sees them: `bt` 1.10
-  never percent-decodes `tr` parameters, so a standard link (`tr=udp%3A%2F%2F...`) would die
-  with "Invalid URL" and lose every tracker. HTML-escaped (`&amp;`) and autolinked
-  (`[2Ftracker](http://2Ftracker)`) links are repaired too
-- the engine's Guice dependency is pinned to **`4.2.3:no_aop`** on purpose. Guice 5 calls
-  `Class.getAnnotatedSuperclass()` (not implemented by Android at any API level) and Guice
-  4's normal build generates cglib FastClasses that Android refuses to load; the `no_aop`
-  build has neither problem, which is why Maven itself runs on it
-- before the engine starts, the app announces once to the link's HTTP(S) trackers, shows
-  their answers in the card and feeds any peers it found back in through `x.pe` - so a
-  working tracker can rescue a swarm that DHT alone cannot reach
-- metadata is fetched from the swarm first (BEP-9), then the file name and size appear
-- DHT (BEP-5), HTTP/UDP trackers, PEX and encryption are handled by the library
-- progress, peers and ETA show in the same card; the live notification is shared with HTTP jobs
+- **UDP trackers (BEP-15), DHT (BEP-5), peer exchange (BEP-11), local discovery (BEP-14),
+  µTP (BEP-29) and encryption** all work, because libtorrent implements them. Public trackers
+  are almost all `udp://`, so an engine that can only speak HTTP to trackers has one path to
+  the swarm where this one has several
+- **metadata (BEP-9)** is fetched from whichever peer answers first; the file name and size
+  appear in the card as soon as it arrives, and until then the progress bar stays indeterminate
+  instead of inventing a percentage
+- magnet links are still **parsed and repaired by the app first** (percent-decoding, `&amp;`
+  repair, autolink removal, base32 info-hashes), then handed to the engine as a clean rebuilt
+  URI — so a link mangled by a chat app never reaches libtorrent's parser
+- the card shows **real engine numbers**: peers, seeds, DHT node count, tracker count and
+  libtorrent's own smoothed download rate. A download that cannot find peers says so with
+  those numbers after three minutes instead of spinning forever
 - single-file torrents are published to `Download/FasterDownloads`; multi-file torrents stay
   together in the app's torrent folder
 - torrents always use the device's default network — bonding two radios only applies to
   HTTP range downloads, because thousands of peer sockets cannot be split meaningfully
+- the native engine adds roughly 12 MB to the APK (two ABIs: `arm64-v8a`, `armeabi-v7a`)
 
 Download only content you have the right to.
 
@@ -125,8 +128,8 @@ Download only content you have the right to.
 - **Mobile data is really consumed** while bonded — typically `100 - wifiShare` percent of
   the bytes. Watch your data cap. Carrier billing and tethering rules apply.
 - **Battery.** Two radios plus several sockets drain faster than a normal download.
-- **Torrent speed** depends on the swarm: a magnet with no seeders will stall until the
-  metadata watchdog reports it.
+- **Torrent speed** depends on the swarm: a magnet with no seeders still stalls, but the card
+  now names the reason (peers, seeds, DHT nodes) after three minutes instead of waiting.
 - The release APK is **debug-signed** unless you provide signing secrets (see below), which
   is fine for sideloading but not for publishing to Play.
 
