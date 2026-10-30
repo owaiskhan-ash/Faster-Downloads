@@ -69,10 +69,10 @@ data class TrackerReport(
 
 object TrackerProbe {
 
-    private const val CONNECT_TIMEOUT_SECONDS = 6L
-    private const val READ_TIMEOUT_SECONDS = 8L
+    private const val CONNECT_TIMEOUT_SECONDS = 5L
+    private const val READ_TIMEOUT_SECONDS = 6L
     private const val DEADLINE_MS = 12_000L
-    private const val MAX_TRACKERS = 10
+    private const val MAX_TRACKERS = 16
     private const val PEER_LIMIT = 80
     private const val USER_AGENT =
         "FasterDownloads/0.5 (+https://github.com/owaiskhan-ash/Faster-Downloads)"
@@ -100,7 +100,7 @@ object TrackerProbe {
         val skipped = trackers.size - http.size
         if (http.isEmpty()) return TrackerReport(emptyList(), skipped, emptyList())
 
-        val pool = Executors.newFixedThreadPool(4) { runnable ->
+        val pool = Executors.newFixedThreadPool(6) { runnable ->
             Thread(runnable, "fd-tracker-probe").apply { isDaemon = true }
         }
         val attempts = mutableListOf<Attempt>()

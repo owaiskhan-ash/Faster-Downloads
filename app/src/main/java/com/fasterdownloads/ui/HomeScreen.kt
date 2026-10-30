@@ -120,7 +120,9 @@ fun FasterDownloadsApp(
                     Text(
                         "Magnet links are fetched from the BitTorrent swarm over DHT and " +
                             "trackers. Metadata comes first, so the file name and size appear " +
-                            "once a peer answers.",
+                            "once a peer answers. If the link's trackers are unreachable " +
+                            "(mobile networks often drop UDP), the app also asks a short list " +
+                            "of public HTTPS trackers for peers.",
                         style = MaterialTheme.typography.bodySmall,
                         color = fg.copy(alpha = 0.62f),
                     )
