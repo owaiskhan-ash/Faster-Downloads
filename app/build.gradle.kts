@@ -12,9 +12,17 @@ android {
         applicationId = "com.fasterdownloads"
         minSdk = 26
         targetSdk = 35
-        versionCode = 11
-        versionName = "0.5.1"
+        versionCode = 12
+        versionName = "0.6.0"
         vectorDrawables { useSupportLibrary = true }
+
+        // libtorrent4j ships one native library per ABI, and no Java fallback exists.
+        // Two ABIs cover every phone in use: 64-bit is the default on Android 8+, and
+        // armeabi-v7a keeps 32-bit devices working. Emulator-only ABIs are left out to
+        // keep the APK from doubling in size.
+        ndk {
+            abiFilters += listOf("arm64-v8a", "armeabi-v7a")
+        }
     }
 
     signingConfigs {
@@ -61,6 +69,12 @@ android {
     }
 
     packaging {
+        // Extract the torrent engine's native library on install instead of mapping it
+        // straight out of the APK: that is the path every Android libtorrent client uses,
+        // and it is what keeps the SWIG JNI binding loadable on older/vendor ROMs.
+        jniLibs {
+            useLegacyPackaging = true
+        }
         resources {
             excludes += "/META-INF/{AL2.0,LGPL2.1}"
             // The BitTorrent library pulls in several Apache-style licenses/notices.
@@ -68,7 +82,7 @@ android {
             excludes += "/META-INF/LICENSE*"
             excludes += "/META-INF/NOTICE*"
             excludes += "/META-INF/INDEX.LIST"
-            // Keep META-INF/services/*: bt discovers its modules through ServiceLoader.
+            // Keep META-INF/services/*: the BitTorrent binder still registers through them.
         }
     }
 }
@@ -91,39 +105,17 @@ dependencies {
     // HTTP transport: connection pooling (keep-alive) per radio.
     implementation("com.squareup.okhttp3:okhttp:4.12.0")
 
-    // BitTorrent (magnet links): pure-Java library, DHT + trackers + peer wire protocol.
-    // Guice is excluded from every route into bt-core: the version bt asks for cannot run
-    // on Android at all (see the pin below), so this project supplies its own.
-    implementation("com.github.atomashpolskiy:bt-core:1.10") {
-        exclude(group = "com.google.inject", module = "guice")
-    }
-    implementation("com.github.atomashpolskiy:bt-dht:1.10") {
-        exclude(group = "com.google.inject", module = "guice")
-    }
-    implementation("com.github.atomashpolskiy:bt-http-tracker-client:1.10") {
-        exclude(group = "com.google.inject", module = "guice")
-    }
-
-    // Guice, pinned by hand for one reason: the popular builds of it cannot start a
-    // torrent client on Android.
+    // BitTorrent (magnet links): libtorrent, the C++ engine behind every working Android
+    // client (LibreTorrent, FrostWire, TorrDroid). It brings the real thing - UDP trackers
+    // (BEP 15), DHT, PeX, LSD, uTP, encryption - none of which can be reimplemented in a
+    // Java-only library to the same effect.
     //
-    //  * Guice 5.0.1 (what bt 1.10 asks for) added BindingSourceRestriction, which calls
-    //    Class.getAnnotatedSuperclass(). Android's java.lang.Class does not implement that
-    //    method at ANY API level -> "No virtual method getAnnotatedSuperclass()...".
-    //  * Guice 4.2.3 (the obvious downgrade) generates a FastClass with a bundled cglib for
-    //    every @Provides method, and Android refuses the generated class
-    //    ("Unable to load cache item" / "can't load this type of class file").
-    //
-    // The "no_aop" classifier, which Maven itself ships and runs on, is the only build that
-    // works: no BindingSourceRestriction and no cglib, so @Provides falls back to plain
-    // reflection. Multibindings live in their own artifact before 5.0 and bt uses
-    // Multibinder/MapBinder, hence the companion dependency.
-    implementation("com.google.inject:guice:4.2.3:no_aop")
-    implementation("com.google.inject.extensions:guice-multibindings:4.2.3") {
-        // This artifact depends on the plain guice jar; keep it out so only the no_aop
-        // build is on the classpath (two jars of the same classes fail dex merging).
-        exclude(group = "com.google.inject", module = "guice")
-    }
+    // The core jar holds the SWIG Java bindings; the `-android-<abi>` jars hold the matching
+    // `libtorrent4j.so`. Each ABI needs its own artifact, and they must line up with the
+    // `abiFilters` above or the JNI load fails with UnsatisfiedLinkError.
+    implementation("org.libtorrent4j:libtorrent4j:2.1.0-38")
+    implementation("org.libtorrent4j:libtorrent4j-android-arm64:2.1.0-38")
+    implementation("org.libtorrent4j:libtorrent4j-android-arm:2.1.0-38")
 
     testImplementation("junit:junit:4.13.2")
 }

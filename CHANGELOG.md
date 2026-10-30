@@ -3,6 +3,41 @@
 All notable changes to this project are documented here.
 This project follows [Semantic Versioning](https://semver.org/).
 
+## [0.6.0] - 2026-10-30
+
+### Changed
+- **The torrent engine is now libtorrent.** Magnet downloads run on
+  [libtorrent](https://github.com/arvidn/libtorrent) through libtorrent4j `2.1.0-38` - the
+  native C++ engine that LibreTorrent, FrostWire and TorrDroid ship - instead of the
+  Java-only `bt` library. This replaces the whole discovery problem rather than patching it:
+  `bt` could only speak HTTP to trackers, so a link whose one `http://` tracker is dead and
+  whose other trackers are `udp://` (the norm) had no path to the swarm. libtorrent speaks
+  **UDP trackers (BEP-15)**, DHT, PeX, LSD, µTP and encryption natively.
+  On device this was the reported failure: `0/1 HTTP trackers answered · 1 failed
+  (InterruptedIOException: timeout) · 17 UDP left to the engine`, stuck on "looking for
+  peers to fetch the metadata from".
+- Removed: `bt-core`, `bt-dht`, `bt-http-tracker-client` and the Guice pins they needed
+  (`4.2.3:no_aop` + `guice-multibindings`), the HTTP tracker probe and the public-tracker
+  fallback list. All of that existed to work around the Java engine's missing UDP support.
+
+### Added
+- Real engine telemetry under the progress card: libtorrent state, DHT node count, peers,
+  seeds and tracker count, updated twice a second.
+- Three honest failure paths so a magnet can never spin forever: no torrent handle after 15 s,
+  no metadata after 180 s, metadata but zero payload after 8 minutes. Each names the live
+  numbers and what they mean.
+- A missing or mismatched native library (`LinkageError` / `UnsatisfiedLinkError`) is reported
+  as "the torrent engine could not start on this device", and CI now checks that
+  `lib/<abi>/libtorrent4j.so` is inside the APK for every ABI declared in `abiFilters`.
+- `MagnetLink.toMagnetUri()`: the sanitised, re-percent-encoded URI that is handed to
+  libtorrent, with round-trip tests.
+
+### Notes
+- The APK grows from 9.1 MB to 18.9 MB (two ABIs: `arm64-v8a`, `armeabi-v7a`); the native
+  library is extracted on install (`useLegacyPackaging`), the arrangement the Android
+  libtorrent clients use.
+- Kotlin/AGP/Gradle, Compose and the HTTP engine are unchanged.
+
 ## [0.5.1] - 2026-10-30
 
 ### Added

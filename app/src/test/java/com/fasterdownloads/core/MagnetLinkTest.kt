@@ -114,4 +114,42 @@ class MagnetLinkTest {
             assertTrue(expected.message!!.contains("info-hash"))
         }
     }
+
+    @Test
+    fun rebuildsACleanMagnetUriForTheEngine() {
+        val link = MagnetLink.parse(
+            "magnet:?xt=urn:btih:$hash&dn=My%20Big%20File.mkv" +
+                "&tr=udp%3A%2F%2Ftracker.opentrackr.org%3A1337%2Fannounce",
+        )
+        val uri = link.toMagnetUri()
+        assertTrue(uri.startsWith("magnet:?xt=urn:btih:$hash"))
+        assertTrue(uri.contains("dn=My%20Big%20File.mkv"))
+        // Percent-encoding is applied again, so libtorrent's parser sees a valid URL.
+        assertTrue(uri.contains("tr=udp%3A%2F%2Ftracker.opentrackr.org%3A1337%2Fannounce"))
+        // Exactly three parameters: the info-hash, the name and the tracker.
+        assertEquals(2, uri.count { it == '&' })
+    }
+
+    @Test
+    fun percentEncodingKeepsUnreservedCharacters() {
+        assertEquals("abc-._~", MagnetLink.percentEncode("abc-._~"))
+        assertEquals("a%20b", MagnetLink.percentEncode("a b"))
+        assertEquals("%E2%9C%93", MagnetLink.percentEncode("\u2713"))
+        // A tracker's own query string survives: `?` and `=` are encoded, not dropped.
+        assertEquals(
+            "http%3A%2F%2Ft.example%2Fannounce%3Fpasskey%3Dabc",
+            MagnetLink.percentEncode("http://t.example/announce?passkey=abc"),
+        )
+    }
+
+    @Test
+    fun repairedLinkRoundTripsThroughTheEngineUri() {
+        // The kind of link a chat app mangles: HTML-escaped ampersands and a line break.
+        val raw = "magnet:?xt=urn:btih:$hash&amp;dn=Show%20S01&amp;tr=udp%3A%2F%2Fopen.stealth.si%3A80%2Fannounce\n"
+        val rebuilt = MagnetLink.parse(raw).toMagnetUri()
+        val reparsed = MagnetLink.parse(rebuilt)
+        assertEquals(hash, reparsed.infoHashHex)
+        assertEquals("Show S01", reparsed.displayName)
+        assertEquals(listOf("udp://open.stealth.si:80/announce"), reparsed.trackers)
+    }
 }

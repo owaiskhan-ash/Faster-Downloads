@@ -118,11 +118,11 @@ fun FasterDownloadsApp(
             if (isMagnet) {
                 Section(title = "Torrent") {
                     Text(
-                        "Magnet links are fetched from the BitTorrent swarm over DHT and " +
-                            "trackers. Metadata comes first, so the file name and size appear " +
-                            "once a peer answers. If the link's trackers are unreachable " +
-                            "(mobile networks often drop UDP), the app also asks a short list " +
-                            "of public HTTPS trackers for peers.",
+                        "Magnet links run on libtorrent - the native BitTorrent engine behind " +
+                            "LibreTorrent and TorrDroid. UDP and HTTP trackers, DHT, peer " +
+                            "exchange, local discovery and \u00b5TP all work, so metadata comes " +
+                            "from whichever path the network allows. The file name and size " +
+                            "appear as soon as a peer answers.",
                         style = MaterialTheme.typography.bodySmall,
                         color = fg.copy(alpha = 0.62f),
                     )
@@ -420,7 +420,7 @@ private fun ProgressSection(state: DownloadUiState) {
 
         if (state.kind == DownloadKind.TORRENT) {
             Text(
-                text = "BitTorrent - DHT + trackers",
+                text = "BitTorrent engine - libtorrent (trackers + DHT + PeX)",
                 style = MaterialTheme.typography.labelSmall,
                 color = fg.copy(alpha = 0.55f),
             )
