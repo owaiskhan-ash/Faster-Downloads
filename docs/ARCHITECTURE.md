@@ -24,9 +24,8 @@ connectivityManager.requestNetwork(request, callback, timeoutMs)
 - On devices where the OEM blocks a second network, the cellular request simply never
   delivers a `Network`; the UI reports "single link" instead of failing.
 
-This is the Android replacement for `SO_BINDTODEVICE` used by Linux multipath tools such as
-[Plexo](https://github.com/anmolkapil/plexo): we do not bind an interface, we bind a
-`Network`.
+This is the Android replacement for `SO_BINDTODEVICE`: an app cannot bind an interface, so it
+binds a `Network` instead.
 
 ## 2. Pinning sockets, and reusing them
 

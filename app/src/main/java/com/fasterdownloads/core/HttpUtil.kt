@@ -65,8 +65,8 @@ class HttpExchange internal constructor(val call: Call, val response: Response) 
  * Every radio gets its own [OkHttpClient], which means:
  *
  *  * its own [ConnectionPool], so a socket opened on Wi-Fi is never handed to a cellular
- *    worker (and vice versa) - the binding guarantee Plexo gets from `SO_BINDTODEVICE`
- *    still holds, because the client's `SocketFactory` and DNS are the [Network]'s;
+ *    worker (and vice versa) - the binding guarantee `SO_BINDTODEVICE` would give still
+ *    holds, because the client's `SocketFactory` and DNS are the [Network]'s;
  *  * keep-alive: a finished range request returns its socket to the pool and the next
  *    chunk reuses it. On a 60-100 ms mobile link that handshake is 10-30 % of the time
  *    spent on a medium chunk (the read timeout is 30 s, so an idle pooled socket is

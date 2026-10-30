@@ -42,7 +42,7 @@ object ChunkPlan {
 
     /**
      * Splits [totalWorkers] between the two radios, weighting Wi-Fi by
-     * [wifiSharePercent] (Plexo-style 75/25, 70/30, ...). Both sides always get at
+     * [wifiSharePercent] (e.g. 75/25, 70/30, ...). Both sides always get at
      * least one worker so the bonded link never sits idle.
      */
     fun workerCounts(totalWorkers: Int, wifiSharePercent: Int): Pair<Int, Int> {

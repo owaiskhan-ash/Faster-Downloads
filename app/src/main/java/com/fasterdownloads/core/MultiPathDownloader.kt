@@ -35,7 +35,7 @@ class CancelledException : IOException("Download cancelled")
  *     only the very first transfer on a radio pays the TCP + TLS handshake.
  *  4. Workers pull chunks from one shared queue, so a slow link never stalls the
  *     download, and the worker counts are nudged towards the requested Wi-Fi/mobile
- *     split (Plexo-style weighting) as real throughput is measured.
+ *     split (adaptive weighting) as real throughput is measured.
  *  5. Progress is journalled to disk, so an interrupted download resumes where it
  *     stopped, and the finished file is SHA-256 hashed before being published.
  */
@@ -553,7 +553,7 @@ class MultiPathDownloader(
     }
 
     /**
-     * Plexo-style weighting: if the measured Wi-Fi share drifts away from the
+     * Adaptive weighting: if the measured Wi-Fi share drifts away from the
      * requested split, hand the faster radio another worker (up to a small cap).
      */
     private fun adaptWorkerAllocation(wifiDelta: Long, mobileDelta: Long) {
