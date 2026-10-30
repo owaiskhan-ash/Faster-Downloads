@@ -22,9 +22,11 @@ import java.util.concurrent.atomic.AtomicBoolean
  * forces an immediate announce instead of waiting for the tracker timer, polls the torrent
  * status for progress, and removes the torrent when the job ends (paused data stays on disk).
  *
- * Note: torrent traffic uses the device's default network. Only the HTTP engine can bond
- * Wi-Fi and mobile data, because a swarm's peer sockets cannot meaningfully be split across
- * two radios.
+ * Peer connections are spread over **both radios**: every TCP connection libtorrent opens goes
+ * through [BondingProxy], a loopback SOCKS5 proxy that dials it on Wi-Fi or on mobile data. A
+ * swarm keeps dozens of connections open, so half of them end up on each radio and the
+ * torrent's throughput is the sum of the two links. If a torrent cannot reach a single peer
+ * that way, bonding is switched off for the session and it falls back to the default network.
  */
 class MagnetDownloader(
     private val context: Context,
@@ -90,7 +92,7 @@ class MagnetDownloader(
             }
 
             // Shared, already-warm session: DHT is up before the magnet is even added.
-            manager = TorrentEngine.acquire()
+            manager = TorrentEngine.acquire(context)
             session = manager
 
             if (cancelled.get()) return stopState()
@@ -240,6 +242,12 @@ class MagnetDownloader(
             val finished = runCatching { status.isFinished() }.getOrDefault(false) ||
                 (hasMetadata && totalBytes > 0L && done >= totalBytes)
 
+            if (!hasMetadata && peers <= 0 && elapsed > BONDING_GRACE_MS &&
+                TorrentEngine.isBonded() && TorrentEngine.disableBonding()
+            ) {
+                noteBondingFallback()
+            }
+
             val diagnostics = describe(manager, status, magnet, extras, peers, seeds)
             val eta = if (rate > 0L && totalBytes > done) (totalBytes - done) / rate else 0L
 
@@ -291,6 +299,16 @@ class MagnetDownloader(
             else -> "Downloading from $peers peers"
         }
 
+    /** Shown once when a peer-less torrent falls back from bonded to the default network. */
+    private fun noteBondingFallback() {
+        emitState {
+            it.copy(
+                message = "No peer came back through the two-radio proxy - continuing on the " +
+                    "device's default network",
+            )
+        }
+    }
+
     /** Real engine numbers, in the card: what the swarm actually looks like right now. */
     private fun describe(
         manager: SessionManager,
@@ -308,6 +326,8 @@ class MagnetDownloader(
         if (seeds > 0) parts += "$seeds seed" + (if (seeds == 1) "" else "s")
         val trackers = magnet.trackers.size + extras.size
         if (trackers > 0) parts += "$trackers tracker" + (if (trackers == 1) "" else "s")
+        val bonding = TorrentEngine.bondingSummary()
+        if (bonding != null) parts += "bonded: $bonding"
         return parts.joinToString(" \u00b7 ")
     }
 
@@ -416,15 +436,55 @@ class MagnetDownloader(
             }
         }
 
-        // Multi-file torrents stay together inside the app's torrent folder.
+        // Multi-file torrents keep their own folder, but inside the app's visible Downloads
+        // folder rather than app-private storage, so the files can actually be found.
+        if (files.isEmpty()) {
+            return emitState {
+                it.copy(
+                    phase = DownloadPhase.COMPLETED,
+                    doneBytes = totalBytes,
+                    speedBps = 0L,
+                    etaSeconds = 0L,
+                    savedPath = dir.absolutePath,
+                    message = "Nothing new to publish - the files were already there",
+                )
+            }
+        }
+
+        val target = torrentName.ifBlank { "torrent" }
+        val published = runCatching {
+            Storage.publishFolder(context, dir, files, target)
+        }.getOrNull()
+
+        if (published == null) {
+            return emitState {
+                it.copy(
+                    phase = DownloadPhase.COMPLETED,
+                    doneBytes = totalBytes,
+                    speedBps = 0L,
+                    etaSeconds = 0L,
+                    savedPath = dir.absolutePath,
+                    message = "Saved ${files.size} files to ${dir.absolutePath}",
+                )
+            }
+        }
+
+        runCatching {
+            files.forEach { file -> file.delete() }
+            // Drop the now-empty torrent folders, deepest first.
+            dir.walkBottomUp()
+                .filter { it.isDirectory && it.absolutePath != dir.absolutePath }
+                .forEach { folder -> if (folder.list()?.isEmpty() == true) folder.delete() }
+        }
+
         return emitState {
             it.copy(
                 phase = DownloadPhase.COMPLETED,
                 doneBytes = totalBytes,
                 speedBps = 0L,
                 etaSeconds = 0L,
-                savedPath = dir.absolutePath,
-                message = "Saved ${files.size} files to the app's torrent folder",
+                savedPath = published.path,
+                message = "Saved ${files.size} files to ${published.path}",
             )
         }
     }
@@ -457,6 +517,7 @@ class MagnetDownloader(
         const val POLL_INTERVAL_MS = 500L
         const val HANDLE_TIMEOUT_MS = 15_000L
         const val REANNOUNCE_INTERVAL_MS = 15_000L
+        const val BONDING_GRACE_MS = 25_000L
         const val METADATA_TIMEOUT_MS = 180_000L
         const val STALL_TIMEOUT_MS = 480_000L
     }

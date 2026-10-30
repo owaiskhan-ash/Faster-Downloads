@@ -114,10 +114,19 @@ LibreTorrent, FrostWire and TorrDroid use.
 - the card shows **real engine numbers**: peers, seeds, DHT node count, tracker count and
   libtorrent's own smoothed download rate. A download that cannot find peers says so with
   those numbers after three minutes instead of spinning forever
-- single-file torrents are published to `Download/FasterDownloads`; multi-file torrents stay
-  together in the app's torrent folder
-- torrents always use the device's default network — bonding two radios only applies to
-  HTTP range downloads, because thousands of peer sockets cannot be split meaningfully
+- **torrents are bonded too.** libtorrent's peer connections are routed through a loopback
+  SOCKS5 proxy the app runs (`BondingProxy`), which dials each connection on Wi-Fi or on mobile
+  data. A swarm holds dozens of connections, so half land on each radio and the torrent's speed
+  is the sum of the two links — the same idea as the HTTP split, per connection instead of per
+  byte range. If a torrent reaches no peer that way, bonding is switched off for the session and
+  it continues on the default network; DHT and UDP trackers were never proxied, so discovery
+  keeps working either way
+
+Everything lands in the app's own folder, **`Download/FasterDownloads`**:
+
+- single files (HTTP or a single-file torrent) go straight in it
+- a multi-file torrent gets its own folder inside it, structure preserved:
+  `Download/FasterDownloads/<torrent name>/...`
 - the native engine is most of the download size: the APK is **~18 MB** instead of ~9 MB
   (two ABIs: `arm64-v8a`, `armeabi-v7a`)
 

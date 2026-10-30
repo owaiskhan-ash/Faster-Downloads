@@ -138,8 +138,9 @@ fun FasterDownloadsApp(
 
                 Text(
                     if (isMagnet) {
-                        "Magnets run on libtorrent; the engine is shared, so a second magnet " +
-                            "finds peers in seconds instead of bootstrapping DHT again."
+                        "Magnets run on libtorrent and are bonded the same way: every peer " +
+                            "connection is split across Wi-Fi and mobile data, so the swarm uses " +
+                            "both radios at once."
                     } else {
                         "HTTP downloads always use Wi-Fi and mobile data together: 50/50 split, " +
                             "8 parallel range requests per network."

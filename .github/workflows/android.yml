@@ -191,7 +191,10 @@ jobs:
           * Every download can be **paused and resumed** from its own card; the partial file
             and its journal survive, so resuming continues from the same byte.
           * Always bonded: Wi-Fi + mobile data together (50/50, 8 range requests per radio) -
-            there is no setting to turn it down.
+            there is no setting to turn it down. **Magnets are bonded too**: peer connections
+            go through a loopback SOCKS5 proxy that dials half of them on each radio.
+          * Everything is downloaded into the app's folder, \`Download/FasterDownloads\`
+            (multi-file torrents get a folder of their own inside it).
           * Light and dark mode: neon-on-black inverts to black-on-neon with the system theme.
           * Resumes interrupted transfers chunk-by-chunk and verifies the finished file.
           * Runs in a foreground service with one aggregated progress notification and a

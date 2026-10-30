@@ -112,6 +112,90 @@ object Storage {
         return PublishResult(uri = Uri.fromFile(target).toString(), path = target.absolutePath)
     }
 
+    /**
+     * Publishes every file of a multi-file torrent into the app's visible Downloads folder,
+     * keeping the torrent's own directory structure:
+     * `Download/FasterDownloads/<torrent name>/<sub path>/<file>`.
+     *
+     * [root] is the folder the torrent was assembled in; each file's path relative to it is
+     * reproduced under `Download/FasterDownloads`. Returns the folder the user should look in.
+     */
+    fun publishFolder(context: Context, root: File, files: List<File>, folderHint: String): PublishResult {
+        val rootPath = root.absolutePath.trimEnd(File.separatorChar)
+        var published = 0
+        for (file in files) {
+            val relative = file.absolutePath
+                .removePrefix(rootPath)
+                .trimStart(File.separatorChar)
+                .replace(File.separatorChar, '/')
+            if (relative.isBlank()) continue
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                publishOneToMediaStore(context, file, relative)
+            } else {
+                publishOneLegacy(context, file, relative)
+            }
+            published++
+        }
+        if (published == 0) throw IOException("No files to publish")
+
+        val topFolder = files.firstOrNull()
+            ?.absolutePath
+            ?.removePrefix(rootPath)
+            ?.trimStart(File.separatorChar)
+            ?.substringBefore(File.separatorChar)
+            ?.takeIf { it.isNotBlank() }
+            ?: folderHint
+        return PublishResult(
+            uri = null,
+            path = "Download/FasterDownloads/$topFolder",
+        )
+    }
+
+    @androidx.annotation.RequiresApi(Build.VERSION_CODES.Q)
+    private fun publishOneToMediaStore(context: Context, source: File, relative: String) {
+        val resolver = context.contentResolver
+        val name = source.name
+        val parent = relative.substringBeforeLast('/', "")
+        val relativePath = buildString {
+            append(Environment.DIRECTORY_DOWNLOADS)
+            append("/FasterDownloads")
+            if (parent.isNotBlank()) {
+                append('/')
+                append(parent)
+            }
+        }
+        val values = ContentValues().apply {
+            put(MediaStore.MediaColumns.DISPLAY_NAME, name)
+            put(MediaStore.MediaColumns.MIME_TYPE, guessMimeType(name))
+            put(MediaStore.MediaColumns.RELATIVE_PATH, relativePath)
+            put(MediaStore.MediaColumns.IS_PENDING, 1)
+        }
+        val collection = MediaStore.Downloads.getContentUri(MediaStore.VOLUME_EXTERNAL_PRIMARY)
+        val uri = resolver.insert(collection, values)
+            ?: throw IOException("Could not create an entry for $name")
+        try {
+            val output = resolver.openOutputStream(uri)
+                ?: throw IOException("Could not open the destination for $name")
+            FileInputStream(source).use { input ->
+                output.use { out -> input.copyTo(out, 256 * 1024) }
+            }
+            val done = ContentValues().apply { put(MediaStore.MediaColumns.IS_PENDING, 0) }
+            resolver.update(uri, done, null, null)
+        } catch (t: Throwable) {
+            runCatching { resolver.delete(uri, null, null) }
+            throw t
+        }
+    }
+
+    private fun publishOneLegacy(context: Context, source: File, relative: String) {
+        @Suppress("DEPRECATION")
+        val downloads = Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS)
+        val target = File(File(downloads, "FasterDownloads"), relative)
+        target.parentFile?.mkdirs()
+        source.copyTo(target, overwrite = true)
+        MediaScannerConnection.scanFile(context, arrayOf(target.absolutePath), null, null)
+    }
+
     private fun uniqueFile(dir: File, name: String): File {
         var candidate = File(dir, name)
         if (!candidate.exists()) return candidate
