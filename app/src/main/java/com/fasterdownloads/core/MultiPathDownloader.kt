@@ -75,6 +75,9 @@ class MultiPathDownloader(
         Collections.synchronizedSet(mutableSetOf<HttpURLConnection>())
 
     private val doneBytes = AtomicLong(0L)
+    private val totalSpeed = SpeedMeter(SPEED_WINDOW_MS)
+    private val wifiSpeed = SpeedMeter(SPEED_WINDOW_MS)
+    private val mobileSpeed = SpeedMeter(SPEED_WINDOW_MS)
     private val completedBytes = AtomicLong(0L)
     private val workersAlive = AtomicInteger(0)
     private val workerSeq = AtomicInteger(0)
@@ -521,6 +524,11 @@ class MultiPathDownloader(
     private fun adaptWorkerAllocation(wifiDelta: Long, mobileDelta: Long) {
         val usable = snapshotRuntimes().filter { !it.disabled }
         val cap = request.connectionsPerNetwork.coerceIn(1, 8) + 2
+
+        // Adding connections is only worth it while there is still a queue to share;
+        // near the tail it just makes the last chunks compete with each other.
+        val remaining = synchronized(queueLock) { pending.size }
+        if (remaining <= workersAlive.get() * 2) return
         if (usable.size == 1) {
             // The other radio was retired: push its share of the work onto the survivor.
             val survivor = usable.first()
@@ -537,9 +545,9 @@ class MultiPathDownloader(
         val actualShare = wifiDelta.toDouble() / total.toDouble()
         val targetShare = request.wifiWeight / 100.0
 
-        if (actualShare < targetShare - 0.12 && wifi.spawned.get() < cap) {
+        if (actualShare < targetShare - 0.15 && wifi.spawned.get() < cap) {
             spawnWorker(wifi)
-        } else if (actualShare > targetShare + 0.12 && mobile.spawned.get() < cap) {
+        } else if (actualShare > targetShare + 0.15 && mobile.spawned.get() < cap) {
             spawnWorker(mobile)
         }
     }
@@ -725,10 +733,6 @@ class MultiPathDownloader(
 
     private fun startTicker() {
         val thread = Thread({
-            var lastTotal = 0L
-            var lastWifi = 0L
-            var lastMobile = 0L
-            var lastTime = SystemClock.elapsedRealtime()
             while (!tickerStop.get()) {
                 try {
                     Thread.sleep(TICK_MS)
@@ -736,17 +740,16 @@ class MultiPathDownloader(
                     break
                 }
                 val now = SystemClock.elapsedRealtime()
-                val elapsed = (now - lastTime).coerceAtLeast(1L)
                 val total = minOf(doneBytes.get(), totalBytes)
-                val wifi = runtimeBytes(isMobile = false)
-                val mobile = runtimeBytes(isMobile = true)
-                val speed = ((total - lastTotal) * 1000L / elapsed).coerceAtLeast(0L)
-                val wifiSpeed = ((wifi - lastWifi) * 1000L / elapsed).coerceAtLeast(0L)
-                val mobileSpeed = ((mobile - lastMobile) * 1000L / elapsed).coerceAtLeast(0L)
-                lastTotal = total
-                lastWifi = wifi
-                lastMobile = mobile
-                lastTime = now
+                totalSpeed.add(now, total)
+                wifiSpeed.add(now, runtimeBytes(isMobile = false))
+                mobileSpeed.add(now, runtimeBytes(isMobile = true))
+
+                // Report a windowed average, not the delta since the last tick: instant
+                // samples make a healthy transfer look like it is stalling.
+                val speed = totalSpeed.rate()
+                val wifiRate = wifiSpeed.rate()
+                val mobileRate = mobileSpeed.rate()
 
                 val remaining = (totalBytes - total).coerceAtLeast(0L)
                 val eta = if (speed > 0L) remaining / speed else 0L
@@ -757,7 +760,7 @@ class MultiPathDownloader(
                         speedBps = speed,
                         etaSeconds = eta,
                         dualActive = snapshotRuntimes().count { !it.disabled } > 1,
-                        links = buildLinkProgress(wifiSpeed, mobileSpeed),
+                        links = buildLinkProgress(wifiRate, mobileRate),
                     )
                 }
                 maybeSaveResume(now)
@@ -824,7 +827,8 @@ class MultiPathDownloader(
         const val MAX_ERROR_CHARS = 400
         const val MAX_RECOVERY_WORKERS = 8
         const val TICK_MS = 450L
-        const val ADAPT_INTERVAL_MS = 4000L
+        const val ADAPT_INTERVAL_MS = 6000L
+        const val SPEED_WINDOW_MS = 3000L
         const val RESUME_SAVE_INTERVAL_MS = 3000L
     }
 }
