@@ -56,7 +56,7 @@ flowchart LR
    whether the server honours ranges. It is then cut into 1 MB – 16 MB chunks that all land
    in one shared work queue.
 4. **Weighted, adaptive workers.** Each radio gets a share of the worker threads
-   (default 70 % Wi-Fi / 30 % mobile). Every 4 s the app compares measured throughput
+   (50 % Wi-Fi / 50 % mobile - the app is always bonded). Every 4 s the app compares measured throughput
    against the requested split and hands the faster radio an extra worker if it is
    under-used. A stalled link never blocks the other one, because work is pulled, not
    pushed.
@@ -81,13 +81,17 @@ More detail: [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
   DHT, PeX, µTP), and the app registers as a magnet handler so links open straight from the
   browser
 - Windowed (3 s) speed and ETA readout, so the number is readable instead of jittery
-- Bonded Wi-Fi + mobile-data download with a configurable Wi-Fi share (50–90 %)
-- 1–8 parallel connections per network, shared work queue with retry
+- **Always bonded**: Wi-Fi + mobile data, 50/50 split, 8 parallel range requests per radio -
+  there is nothing to configure and no way to accidentally run single-link
+- **Several downloads at once**: add as many as you like, three run in parallel and the rest
+  wait in a queue; every card has its own pause/resume/cancel/remove buttons
+- **Pause and resume**: pausing stops the sockets and keeps the partial file plus its journal,
+  so resuming continues from the same byte (torrents keep what they already downloaded)
 - Adaptive weighting driven by real per-link throughput
 - Chunk-level resume after cancellation, process death or network loss
 - SHA-256 of the finished file plus exact size verification
 - Saves to `Download/FasterDownloads` (MediaStore on Android 10+, direct file on 8–9)
-- Foreground service with progress notification and in-notification cancel
+- Foreground service with progress notification and a cancel action for the whole batch
 - Automatic fallback to a single connection when the server ignores `Range`
 
 ## Torrents (magnet links)

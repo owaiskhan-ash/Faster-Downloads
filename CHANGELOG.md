@@ -3,6 +3,38 @@
 All notable changes to this project are documented here.
 This project follows [Semantic Versioning](https://semver.org/).
 
+## [0.7.0] - 2026-10-30
+
+### Added
+- **Pause and resume.** Every download card has Pause / Resume. Pausing drops the sockets and
+  keeps the partial file plus its chunk journal, so resuming continues from the same byte;
+  torrents keep the pieces they already have. Paused jobs no longer need the service, so they
+  survive with the list and can be resumed much later.
+- **Several downloads at once.** The app is now a download list, not a single job: add as many
+  links as you like, three run in parallel and the rest sit in `QUEUED` until a slot frees up.
+  Each card carries its own pause/resume/cancel/remove and its own progress, speed, ETA, peers
+  and saved-file block. "Clear finished" tidies the list.
+- **Faster metadata.** The libtorrent session is now shared by the whole app and pre-warmed
+  when the app opens, so DHT bootstrap happens once instead of once per magnet - that bootstrap
+  was most of the "looking for peers to fetch the metadata from" wait. Each torrent also
+  force-announces to every tracker in every tier the moment it is added (and again every 15 s
+  while metadata is missing), and a link carrying fewer than three trackers gets a few
+  long-lived open ones appended.
+- Engine settings for peer discovery: announce to all trackers/tiers, prefer UDP trackers,
+  4 MB metadata limit, room for 10 active torrents.
+
+### Changed
+- **Always bonded, no settings.** The Links section (bond toggle, Wi-Fi share slider,
+  connections slider) is gone: HTTP downloads always use Wi-Fi and mobile data together, split
+  50/50, with the maximum of 8 parallel range requests per network.
+- The download form never blocks: a new link can be added while others are running.
+- One notification covers the batch ("3 downloads running", aggregated progress and speed)
+  with a Cancel-all action; single jobs still show their own name and percentage.
+
+### Notes
+- The list lives in memory, so a force-stop or a reboot clears it (finished files are already
+  in Downloads, partial files resume when the same link is added again).
+
 ## [0.6.0] - 2026-10-30
 
 ### Changed

@@ -181,16 +181,21 @@ jobs:
           * Requests a Wi-Fi *and* a cellular network at the same time and pins each
             socket group to its radio with \`Network.openConnection\`.
           * Splits the file into ranged chunks served by a shared queue, so a slow link
-            never blocks the other one, with a weighted Wi-Fi/mobile split (default 70/30).
+            never blocks the other one, always split 50/50 across the two radios.
           * Browser-style request headers (User-Agent, Referer), a shared cookie jar across
             both radios, and a plain-GET fallback so hosts that reject app-shaped or ranged
             requests no longer fail with \`HTTP 403\`.
-          * Downloads \`magnet:\` links on **libtorrent** (the native engine behind
-            LibreTorrent/TorrDroid): UDP + HTTP trackers, DHT, PeX, LSD and µTP, opened
-            straight from a browser or the share sheet.
+          * Downloads several files at once and downloads \`magnet:\` links on **libtorrent**
+            (the native engine behind LibreTorrent/TorrDroid): UDP + HTTP trackers, DHT, PeX,
+            LSD and µTP, with one shared warm session so metadata arrives quickly.
+          * Every download can be **paused and resumed** from its own card; the partial file
+            and its journal survive, so resuming continues from the same byte.
+          * Always bonded: Wi-Fi + mobile data together (50/50, 8 range requests per radio) -
+            there is no setting to turn it down.
           * Light and dark mode: neon-on-black inverts to black-on-neon with the system theme.
           * Resumes interrupted transfers chunk-by-chunk and verifies the finished file.
-          * Runs in a foreground service with progress notification and cancel action.
+          * Runs in a foreground service with one aggregated progress notification and a
+            cancel-all action.
 
           ### Caveats
           * The host must support \`Range\` requests, otherwise it falls back to one connection.

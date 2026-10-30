@@ -55,10 +55,10 @@ data class MagnetLink(
      * breaks) never reaches libtorrent's parser. Every value is percent-encoded again, so
      * trackers with their own query strings survive the round trip.
      */
-    fun toMagnetUri(): String {
+    fun toMagnetUri(extraTrackers: List<String> = emptyList()): String {
         val parts = mutableListOf("xt=urn:btih:$infoHashHex")
         displayName?.takeIf { it.isNotBlank() }?.let { name -> parts += "dn=${percentEncode(name)}" }
-        trackers.forEach { url -> parts += "tr=${percentEncode(url)}" }
+        (trackers + extraTrackers).distinct().forEach { url -> parts += "tr=${percentEncode(url)}" }
         return parts.joinToString(separator = "&", prefix = "magnet:?")
     }
 

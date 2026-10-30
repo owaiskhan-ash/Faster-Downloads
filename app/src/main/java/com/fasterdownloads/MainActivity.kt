@@ -16,11 +16,15 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.core.content.ContextCompat
+import androidx.lifecycle.lifecycleScope
 import com.fasterdownloads.core.DownloadController
+import com.fasterdownloads.core.TorrentEngine
 import com.fasterdownloads.core.ThemeMode
 import com.fasterdownloads.core.ThemePreference
 import com.fasterdownloads.ui.FasterDownloadsApp
 import com.fasterdownloads.ui.theme.FasterDownloadsTheme
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
 
 class MainActivity : ComponentActivity() {
 
@@ -35,6 +39,9 @@ class MainActivity : ComponentActivity() {
             navigationBarStyle = systemBarStyle(ThemePreference.isNight(this)),
         )
         handleIntent(intent)
+        // Warm the BitTorrent engine up while the user is still typing: DHT bootstrap takes
+        // tens of seconds, and doing it in advance is what makes the first magnet quick.
+        lifecycleScope.launch(Dispatchers.IO) { TorrentEngine.warmUp() }
         setContent {
             val mode by ThemePreference.mode.collectAsState()
             val systemNight = isSystemInDarkTheme()
