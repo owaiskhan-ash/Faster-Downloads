@@ -165,6 +165,9 @@ jobs:
             socket group to its radio with \`Network.openConnection\`.
           * Splits the file into ranged chunks served by a shared queue, so a slow link
             never blocks the other one, with a weighted Wi-Fi/mobile split (default 70/30).
+          * Browser-style request headers (User-Agent, Referer), a shared cookie jar across
+            both radios, and a plain-GET fallback so hosts that reject app-shaped or ranged
+            requests no longer fail with \`HTTP 403\`.
           * Resumes interrupted transfers chunk-by-chunk and verifies the finished file.
           * Runs in a foreground service with progress notification and cancel action.
 
