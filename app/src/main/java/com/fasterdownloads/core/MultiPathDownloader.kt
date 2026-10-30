@@ -9,7 +9,6 @@ import java.io.File
 import java.io.FileOutputStream
 import java.io.IOException
 import java.io.RandomAccessFile
-import java.net.HttpURLConnection
 import java.nio.ByteBuffer
 import java.nio.channels.FileChannel
 import java.util.ArrayDeque
@@ -29,8 +28,11 @@ class CancelledException : IOException("Download cancelled")
  *     cellular [android.net.Network] *simultaneously* (Android happily keeps both up).
  *  2. The file size is probed and split into byte ranges ("chunks") using HTTP
  *     `Range` requests.
- *  3. Worker threads are pinned to one network each — every request is opened via
- *     `Network.openConnection`, so its sockets physically leave through that radio.
+ *  3. Worker threads are pinned to one network each — every request runs on a client
+ *     whose `SocketFactory` and DNS belong to that `Network`, so its sockets physically
+ *     leave through that radio. Each radio also keeps its connections alive: a finished
+ *     range request is handed back to the pool and the next chunk reuses the socket, so
+ *     only the very first transfer on a radio pays the TCP + TLS handshake.
  *  4. Workers pull chunks from one shared queue, so a slow link never stalls the
  *     download, and the worker counts are nudged towards the requested Wi-Fi/mobile
  *     split (Plexo-style weighting) as real throughput is measured.
@@ -70,8 +72,8 @@ class MultiPathDownloader(
 
     private val networkLinks = NetworkLinks(context)
     private val runtimes = mutableListOf<LinkRuntime>()
-    private val activeConnections: MutableSet<HttpURLConnection> =
-        Collections.synchronizedSet(mutableSetOf<HttpURLConnection>())
+    private val activeExchanges: MutableSet<HttpExchange> =
+        Collections.synchronizedSet(mutableSetOf<HttpExchange>())
 
     private val doneBytes = AtomicLong(0L)
     private val totalSpeed = SpeedMeter(SPEED_WINDOW_MS)
@@ -102,10 +104,10 @@ class MultiPathDownloader(
 
     override fun cancel() {
         cancelled.set(true)
-        // Dropping the sockets makes an in-flight read fail immediately instead of
+        // Cancelling the calls makes an in-flight read fail immediately instead of
         // waiting for the read timeout.
-        val open = synchronized(activeConnections) { activeConnections.toList() }
-        open.forEach { connection -> runCatching { connection.disconnect() } }
+        val open = synchronized(activeExchanges) { activeExchanges.toList() }
+        open.forEach { exchange -> exchange.cancel() }
     }
 
     /** Blocking entry point — call it from a background thread. Returns the final state. */
@@ -162,6 +164,7 @@ class MultiPathDownloader(
             }
         } finally {
             stopTicker()
+            snapshotRuntimes().forEach { runtime -> HttpUtil.release(runtime.handle.network) }
             networkLinks.release()
             runCatching { channel?.close() }
             channel = null
@@ -404,23 +407,24 @@ class MultiPathDownloader(
     }
 
     private fun fetchChunk(runtime: LinkRuntime, chunk: Chunk) {
-        val connection = HttpUtil.open(
+        val exchange = HttpUtil.execute(
             network = runtime.handle.network,
             url = request.url,
             method = "GET",
             range = "bytes=${chunk.start}-${chunk.end}",
+            isCancelled = { cancelled.get() },
         )
-        activeConnections.add(connection)
+        activeExchanges.add(exchange)
         var written = 0L
         try {
-            val code = connection.responseCode
+            val code = exchange.code
             if (code == 200) throw IOException("The server ignored the Range header")
             if (code != 206) {
-                throw IOException(HttpUtil.describeResponse(connection, "bytes ${chunk.start}-${chunk.end}"))
+                throw IOException(HttpUtil.describeResponse(exchange, "bytes ${chunk.start}-${chunk.end}"))
             }
 
             val buffer = ByteArray(BUFFER_SIZE)
-            val input = connection.inputStream
+            val input = exchange.bodyStream()
             var position = chunk.start
             var remaining = chunk.length
             while (remaining > 0L) {
@@ -439,8 +443,10 @@ class MultiPathDownloader(
             if (written > 0L) doneBytes.addAndGet(-written)
             throw t
         } finally {
-            activeConnections.remove(connection)
-            runCatching { connection.disconnect() }
+            activeExchanges.remove(exchange)
+            // Closing (rather than cancelling) an exhausted body returns the socket to
+            // the keep-alive pool, ready for this radio's next chunk.
+            exchange.close()
         }
     }
 
@@ -585,18 +591,22 @@ class MultiPathDownloader(
             )
         }
 
-        var connection: HttpURLConnection? = null
+        var exchange: HttpExchange? = null
         try {
-            val active = HttpUtil.open(runtime.handle.network, request.url, "GET", null)
-            connection = active
-            activeConnections.add(active)
-            val code = active.responseCode
-            if (code < 200 || code > 299) throw IOException("HTTP $code")
-            val reported = active.contentLengthLong
+            val active = HttpUtil.execute(
+                network = runtime.handle.network,
+                url = request.url,
+                method = "GET",
+                isCancelled = { cancelled.get() },
+            )
+            exchange = active
+            activeExchanges.add(active)
+            if (active.code !in 200..299) throw IOException(HttpUtil.describeResponse(active))
+            val reported = active.contentLength
             if (reported > 0L) totalBytes = reported
 
             FileOutputStream(file).use { output ->
-                active.inputStream.use { input ->
+                active.bodyStream().use { input ->
                     val buffer = ByteArray(BUFFER_SIZE)
                     while (true) {
                         if (cancelled.get()) throw CancelledException()
@@ -609,8 +619,8 @@ class MultiPathDownloader(
                 }
             }
         } finally {
-            connection?.let { activeConnections.remove(it) }
-            runCatching { connection?.disconnect() }
+            exchange?.let { activeExchanges.remove(it) }
+            exchange?.close()
         }
 
         if (totalBytes <= 0L) {
