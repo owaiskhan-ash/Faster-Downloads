@@ -62,6 +62,24 @@ jobs:
           path: app/build/outputs/apk/release/*.apk
           if-no-files-found: warn
 
+      - name: Inspect release APK
+        if: success()
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          APK=$(ls app/build/outputs/apk/release/*.apk | head -1)
+          BT=$(ls -d "$ANDROID_HOME"/build-tools/*/ | sort -V | tail -1)
+          {
+            echo "### Release APK inspection"
+            echo '```'
+            ls -l "$APK"
+            "${BT}apksigner" verify --print-certs "$APK" 2>&1 | head -15
+            "${BT}aapt2" dump badging "$APK" 2>&1 | head -12
+            echo '```'
+          } > inspect.md
+          cat inspect.md >> "$GITHUB_STEP_SUMMARY"
+          gh api -X POST "repos/${GITHUB_REPOSITORY}/commits/${GITHUB_SHA}/comments" -F body=@inspect.md || true
+
       # The sandbox that drives this repo cannot read Actions logs, so failures are
       # posted back as a commit comment where they can be picked up over the API.
       - name: Report build failure

@@ -342,6 +342,7 @@ class MultiPathDownloader(
                     try {
                         fetchChunk(runtime, chunk)
                         markCompleted(chunk)
+                        runtime.error = null
                         break
                     } catch (t: Throwable) {
                         if (cancelled.get()) {
