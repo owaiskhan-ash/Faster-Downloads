@@ -89,6 +89,22 @@ class TrackerProbeTest {
     }
 
     @Test
+    fun publicFallbackTrackersAreTCPAndWellFormed() {
+        assertTrue(DefaultTrackers.http.size in 4..16)
+        DefaultTrackers.http.forEach { tracker ->
+            assertTrue(
+                "\$tracker must be http(s) so it survives networks that drop UDP",
+                tracker.startsWith("http://") || tracker.startsWith("https://"),
+            )
+            assertTrue(tracker.contains("/announce"))
+        }
+        assertEquals(
+            DefaultTrackers.http.size,
+            DefaultTrackers.http.distinct().size,
+        )
+    }
+
+    @Test
     fun summaryNamesWhatAnswered() {
         val report = TrackerReport(
             outcomes = listOf(

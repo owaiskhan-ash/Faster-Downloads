@@ -90,15 +90,27 @@ class MagnetDownloader(
             // Ask the HTTP trackers ourselves. Their answer tells us whether the swarm exists
             // at all, and the peers they return go straight into the magnet (`x.pe`), so the
             // metadata fetch does not depend on DHT finding nodes first.
+            // The link's own trackers first, then a short list of public HTTP(S) ones: UDP
+            // trackers and DHT are unreachable on networks that drop UDP, and HTTPS on 443
+            // is the one path that always survives. These only produce a peer list - they are
+            // not written into the magnet.
+            val linkTrackers = magnet.trackers
+            val fallbacks = DefaultTrackers.http.filterNot { fallback -> linkTrackers.contains(fallback) }
             val report = runCatching {
-                TrackerProbe.probe(magnet.trackers, magnet.infoHashBytes)
+                TrackerProbe.probe(linkTrackers + fallbacks, magnet.infoHashBytes)
             }.getOrNull()
             trackerReport = report
             val trackerPeers = report?.peers.orEmpty()
 
             emitState {
                 it.copy(
-                    diagnostics = report?.summary,
+                    diagnostics = report?.summary?.let { summary ->
+                        if (fallbacks.isEmpty()) {
+                            summary
+                        } else {
+                            "$summary (incl. ${fallbacks.size} public fallbacks)"
+                        }
+                    },
                     message = when {
                         trackerPeers.isNotEmpty() ->
                             "Handing ${trackerPeers.size} tracker peers to the engine (plus DHT)..."

@@ -3,6 +3,23 @@
 All notable changes to this project are documented here.
 This project follows [Semantic Versioning](https://semver.org/).
 
+## [0.5.1] - 2026-10-30
+
+### Added
+- **Public HTTP(S) tracker fallback.** A magnet link that lists only `udp://` trackers (the
+  norm) plus one dead `http://` tracker has no reachable path to the swarm on a network that
+  drops UDP, which is exactly what the diagnostics line reported on device:
+  `0/1 HTTP trackers answered … 17 UDP left to the engine`. The tracker probe now also asks a
+  short list of long-lived public **HTTPS** trackers (ports 80/443 - the traffic no network
+  blocks), announced once each, and feeds whatever peers they know into the magnet via `x.pe`.
+  They are not written into the magnet, so nothing keeps announcing to them afterwards, and
+  the diagnostics line says how many were included.
+- The Torrent card states this explicitly, so the extra announces are not a surprise.
+
+### Changed
+- Tracker probe budget: 16 trackers, 6 threads, 12 s deadline (5 s connect / 6 s read), so
+  the pre-flight check cannot delay the download for long.
+
 ## [0.5.0] - 2026-10-30
 
 ### Added
