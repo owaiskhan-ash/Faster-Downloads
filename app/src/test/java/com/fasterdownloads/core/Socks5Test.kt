@@ -57,8 +57,9 @@ class Socks5Test {
     fun parsesAnIpv6ConnectRequest() {
         val bytes = mutableListOf(5, 1, 0, 4)
         repeat(16) { bytes.add(if (it == 15) 1 else 0) }
-        bytes.add(0)
-        bytes.add(443)
+        // Port 443 is 0x01BB, which is why a port never fits in one byte.
+        bytes.add(0x01)
+        bytes.add(0xBB)
         val target = Socks5.readTarget(ByteArrayInputStream(ByteArray(bytes.size) { bytes[it].toByte() }))
             as SocksTarget.Ip
         assertEquals(443, target.port)
