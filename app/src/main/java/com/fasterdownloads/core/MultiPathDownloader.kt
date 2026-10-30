@@ -115,8 +115,8 @@ class MultiPathDownloader(
 
             val info = probeServer()
             totalBytes = if (info.size > 0L) info.size else 0L
-            if (totalBytes <= 0L) throw IOException("The server did not report a file size")
-            rangeSupported = info.rangeSupported
+            // Without a size there is nothing to split, so fall back to one stream.
+            rangeSupported = info.rangeSupported && totalBytes > 0L
             displayName = Storage.sanitizeFileName(
                 request.fileName.takeIf { it.isNotBlank() }
                     ?: info.suggestedName
@@ -215,26 +215,27 @@ class MultiPathDownloader(
 
     private fun probeServer(): RemoteInfo {
         var lastError: Throwable? = null
+        var answered: RemoteInfo? = null
         for (runtime in snapshotRuntimes()) {
             checkCancelled()
             try {
                 val info = HttpUtil.probe(runtime.handle.network, request.url)
                 if (info.size > 0L) return info
-                lastError = IOException("The server did not report a size")
+                if (answered == null) answered = info
             } catch (t: Throwable) {
                 runtime.error = t.message
                 lastError = t
             }
         }
-        throw IOException(lastError?.message ?: "Could not reach the server")
+        return answered ?: throw IOException(lastError?.message ?: "Could not reach the server")
     }
 
     // ------------------------------------------------------------- transfer
 
     private fun runRangedDownload() {
         val file = partFile ?: throw IOException("Working file is unavailable")
-        chunkSize = planChunkSize(totalBytes)
-        totalChunks = ((totalBytes + chunkSize - 1) / chunkSize).toInt()
+        chunkSize = ChunkPlan.chunkSize(totalBytes, workerBudget())
+        totalChunks = ChunkPlan.chunkCount(totalBytes, chunkSize)
 
         val randomAccessFile = RandomAccessFile(file, "rw")
         if (randomAccessFile.length() != totalBytes) {
@@ -272,14 +273,6 @@ class MultiPathDownloader(
         runCatching { randomAccessFile.fd.sync() }
     }
 
-    private fun planChunkSize(total: Long): Long {
-        val budget = workerBudget().coerceAtLeast(2)
-        val targetChunks = (budget * 10).coerceAtLeast(16).toLong()
-        val byWorker = total / targetChunks
-        val byCount = total / MAX_CHUNKS
-        return byWorker.coerceAtLeast(byCount).coerceAtLeast(MIN_CHUNK).coerceAtMost(MAX_CHUNK)
-    }
-
     private fun workerBudget(): Int {
         val perLink = request.connectionsPerNetwork.coerceIn(1, 8)
         return perLink * snapshotRuntimes().size.coerceAtLeast(1)
@@ -306,9 +299,9 @@ class MultiPathDownloader(
     }
 
     private fun chunkAt(index: Int): Chunk {
-        val start = index.toLong() * chunkSize
-        val end = minOf(start + chunkSize - 1L, totalBytes - 1L)
-        return Chunk(index, start, end)
+        val range = ChunkPlan.bounds(totalBytes, chunkSize, index)
+            ?: throw IOException("Chunk $index is outside the file")
+        return Chunk(index, range.first, range.last)
     }
 
     private fun startWorkers() {
@@ -321,9 +314,7 @@ class MultiPathDownloader(
         val wifi = list.firstOrNull { !it.handle.isMobile } ?: return
         val mobile = list.firstOrNull { it.handle.isMobile } ?: return
         val totalWorkers = perLink * list.size
-        val wifiShare = request.wifiWeight.coerceIn(10, 90)
-        val wifiWorkers = maxOf(1, Math.round(totalWorkers * wifiShare / 100f))
-        val mobileWorkers = maxOf(1, totalWorkers - wifiWorkers)
+        val (wifiWorkers, mobileWorkers) = ChunkPlan.workerCounts(totalWorkers, request.wifiWeight)
         repeat(wifiWorkers) { spawnWorker(wifi) }
         repeat(mobileWorkers) { spawnWorker(mobile) }
     }
@@ -786,9 +777,6 @@ class MultiPathDownloader(
 
     private companion object {
         const val BUFFER_SIZE = 256 * 1024
-        const val MIN_CHUNK = 256L * 1024
-        const val MAX_CHUNK = 8L * 1024 * 1024
-        const val MAX_CHUNKS = 4000L
         const val MAX_ATTEMPTS = 4
         const val MAX_RECOVERY_WORKERS = 8
         const val TICK_MS = 450L
