@@ -132,7 +132,7 @@ object TrackerProbe {
         return TrackerReport(attempts.map { it.outcome }.sortedBy { it.tracker }, skipped, peers)
     }
 
-    internal fun announce(tracker: String, infoHash: ByteArray): Attempt {
+    private fun announce(tracker: String, infoHash: ByteArray): Attempt {
         val request = Request.Builder()
             .url(announceUrl(tracker, infoHash))
             .header("User-Agent", USER_AGENT)
