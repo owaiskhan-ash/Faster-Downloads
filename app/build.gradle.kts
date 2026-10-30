@@ -12,8 +12,8 @@ android {
         applicationId = "com.fasterdownloads"
         minSdk = 26
         targetSdk = 35
-        versionCode = 4
-        versionName = "0.2.0"
+        versionCode = 6
+        versionName = "0.3.0"
         vectorDrawables { useSupportLibrary = true }
     }
 
@@ -87,6 +87,9 @@ dependencies {
     debugImplementation("androidx.compose.ui:ui-tooling")
 
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.8.1")
+
+    // HTTP transport: connection pooling (keep-alive) per radio.
+    implementation("com.squareup.okhttp3:okhttp:4.12.0")
 
     // BitTorrent (magnet links): pure-Java library, DHT + trackers + peer wire protocol.
     implementation("com.github.atomashpolskiy:bt-core:1.10")

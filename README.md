@@ -35,8 +35,8 @@ flowchart LR
     CM -->|requestNetwork CELLULAR| NC[Network B]
     Q --> W1[Wi-Fi workers]
     Q --> W2[Mobile-data workers]
-    NW -->|Network.openConnection| W1
-    NC -->|Network.openConnection| W2
+    NW -->|pooled client, Network socket factory| W1
+    NC -->|pooled client, Network socket factory| W2
     W1 --> F[RandomAccessFile / FileChannel positional writes]
     W2 --> F
     F --> V[SHA-256 + size check]
@@ -47,12 +47,13 @@ flowchart LR
    `TRANSPORT_WIFI` and once for `TRANSPORT_CELLULAR`. Both callbacks stay registered for
    the whole transfer, so the platform keeps the cellular link up even though Wi-Fi is the
    default network.
-2. **Sockets bound per radio.** Every request is opened with `Network.openConnection(url)`,
-   which is Android's equivalent of `SO_BINDTODEVICE`: DNS and TCP traffic for that
-   connection leave through that network only.
+2. **Sockets bound per radio, and kept alive.** Each radio gets its own OkHttp client whose
+   `SocketFactory` and DNS come from its `Network` — Android's equivalent of
+   `SO_BINDTODEVICE`: DNS and TCP traffic leave through that network only. That client also
+   owns a connection pool, so a finished range request hands its socket back and the next
+   chunk on the same radio reuses it instead of paying a TCP + TLS handshake again.
 3. **Range splitting.** The file is probed with `Range: bytes=0-0` to learn its size and
-   whether the server honours ranges. It is then cut into 1 MB – 16 MB chunks (about six
-   per worker, so a TLS handshake is never a measurable share of a request) that all land
+   whether the server honours ranges. It is then cut into 1 MB – 16 MB chunks that all land
    in one shared work queue.
 4. **Weighted, adaptive workers.** Each radio gets a share of the worker threads
    (default 70 % Wi-Fi / 30 % mobile). Every 4 s the app compares measured throughput

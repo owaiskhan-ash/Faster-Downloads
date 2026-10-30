@@ -28,18 +28,42 @@ This is the Android replacement for `SO_BINDTODEVICE` used by Linux multipath to
 [Plexo](https://github.com/anmolkapil/plexo): we do not bind an interface, we bind a
 `Network`.
 
-## 2. Pinning sockets
+## 2. Pinning sockets, and reusing them
 
-Every HTTP request is created with
+Each `Network` gets one `OkHttpClient`, created on first use and kept for the whole
+transfer:
 
 ```kotlin
-val connection = network.openConnection(URL(url)) as HttpURLConnection
+OkHttpClient.Builder()
+    .socketFactory(network.socketFactory)   // every socket leaves on this radio
+    .dns { host -> network.getAllByName(host).toList() }   // ...and so does DNS
+    .cookieJar(sharedJar)                   // session cookies travel between radios
+    .connectionPool(ConnectionPool(16, 5, TimeUnit.MINUTES))
+    .protocols(listOf(Protocol.HTTP_1_1))   // see below
 ```
 
-`Network.openConnection` returns a `URLConnection` whose sockets — including DNS — are bound
-to that network. `HttpUtil.open` additionally handles redirects manually (so a redirect
-cannot silently hop back to the default network), sets `Accept-Encoding: identity` (ranges
-address wire bytes, never gzipped bytes), and applies sane timeouts.
+Three properties matter:
+
+- **Binding is per client, not per request.** The network's socket factory and DNS are
+  baked into the client, so no request can accidentally escape onto another radio — and
+  because each radio has its *own* connection pool, a pooled Wi-Fi socket is never handed
+  to a cellular worker.
+- **Keep-alive.** `HttpExchange.close()` returns the socket to the pool. A 206 body is
+  exactly as long as its `Content-Length`, so reading the range fully marks the connection
+  reusable; the next chunk on that radio starts sending bytes immediately. Only the first
+  request per radio pays the TCP + TLS round trips.
+- **HTTP/1.1 on purpose.** Multiplexing several ranges onto one HTTP/2 connection would
+  collapse N TCP flows into one, and carriers/CDNs shape *per flow* — the parallel
+  connections are half of why bonding beats a single stream. So we keep many pooled
+  connections instead of many streams in one connection.
+
+Redirects are still followed by hand (`HttpUtil.execute`) rather than by the client, so a
+redirect cannot silently hop back to the default network and so each hop can be cancelled.
+A single shared `CookieJar` keeps the `403`-avoidance behaviour from 0.1.1: a session cookie
+set by the first response is sent on every later request, on either radio.
+
+Cancellation goes through `Call.cancel()`, which aborts a read immediately instead of
+letting it block until the 30 s read timeout.
 
 ## 3. Splitting the file
 
@@ -56,10 +80,11 @@ targetChunks = max(workers * 6, 12)
 chunkSize    = clamp(total / targetChunks, 1 MB, 16 MB)    # and <= 4000 chunks/file
 ```
 
-Chunks are deliberately few and large: every range request opens a fresh connection (so a
-fresh TLS handshake), and 256 KB chunks made handshake latency a visible part of the
-transfer. Six chunks per worker still lets a fast radio drain work the slow radio has not
-claimed, while the tail stays at one chunk per worker.
+Chunks are deliberately few and large. They were sized back when every range request opened
+a fresh connection (256 KB chunks made handshake latency a visible part of the transfer), and
+keep-alive only strengthens the argument: fewer requests means less per-request overhead.
+Six chunks per worker still lets a fast radio drain work the slow radio has not claimed,
+while the tail stays at one chunk per worker.
 
 ## 4. Concurrency model
 

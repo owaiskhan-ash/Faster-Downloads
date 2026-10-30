@@ -3,6 +3,24 @@
 All notable changes to this project are documented here.
 This project follows [Semantic Versioning](https://semver.org/).
 
+## [0.3.0] - 2026-10-30
+
+### Changed
+- **Connection reuse per radio.** The HTTP transport moved from a fresh
+  `HttpURLConnection` per range request to one pooled OkHttp client per `Network`, so a
+  finished range request returns its socket to the pool and the next chunk reuses it. Only
+  the first request on each radio pays the TCP + TLS handshake; on a 60-100 ms mobile link
+  that handshake was 10-30 % of the time spent on a medium chunk. Binding is unchanged
+  (the client's socket factory and DNS come from the `Network`), the shared cookie jar
+  still crosses radios, redirects are still followed by hand, and cancellation now goes
+  through `Call.cancel()`.
+- HTTP/1.1 is pinned deliberately: HTTP/2 multiplexing would collapse the parallel flows
+  into one TCP connection, losing the per-flow shaping bypass that makes bonding fast.
+- New launcher icon: black Wi-Fi + mobile-data glyphs on the neon field, shipped as an
+  adaptive icon (neon background, ink foreground, `monochrome` layer for Android 13 themed
+  icons) plus raster mipmaps for mdpi..xxxhdpi. `branding/make-icons.py` regenerates them
+  from `branding/app-icon.png`.
+
 ## [0.2.0] - 2026-10-30
 
 ### Added
