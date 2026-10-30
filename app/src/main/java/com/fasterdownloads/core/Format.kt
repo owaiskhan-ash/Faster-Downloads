@@ -32,3 +32,10 @@ fun formatDuration(seconds: Long): String {
         else -> String.format(Locale.US, "%ds", secs)
     }
 }
+
+/** First non-blank line of an error message, so link rows stay readable. */
+fun firstLine(message: String?): String? = message
+    ?.lineSequence()
+    ?.firstOrNull { it.isNotBlank() }
+    ?.trim()
+    ?.takeIf { it.isNotEmpty() }

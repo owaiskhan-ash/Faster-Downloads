@@ -93,6 +93,24 @@ More detail: [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
 - The release APK is **debug-signed** unless you provide signing secrets (see below), which
   is fine for sideloading but not for publishing to Play.
 
+## Troubleshooting
+
+**`HTTP 403 Forbidden`** - the host refused the request. The app already sends browser-shaped
+headers (`User-Agent`, `Accept`, `Referer`), keeps one cookie jar across both radios, and
+falls back to a plain `GET` on a single connection when a server rejects ranged requests.
+If a 403 still appears, the URL is almost certainly not a direct file link: it needs a
+login/session cookie, is an expiring one-time link, or sits behind a Cloudflare-style
+challenge. Open the link in the browser and copy the real download target. The error card
+shows the status line, the `Server` header, a snippet of the server's message and a hint, so
+you can tell those cases apart.
+
+**`HTTP 416` or "The server ignored the Range header"** - the file changed size on the
+server, or ranges are not really supported. Start the download again.
+
+**A link row turns red and "Bonded" becomes "Single link"** - that radio was retired after
+repeated failures (blocked IP, no data left, carrier 403) so the transfer could still finish
+on the other radio.
+
 ## Build from source
 
 ```bash

@@ -52,9 +52,14 @@ class MultiPathDownloader(
         val bytes = AtomicLong(0L)
         val workers = AtomicInteger(0)
         val spawned = AtomicInteger(0)
+        val failures = AtomicInteger(0)
 
         @Volatile
         var error: String? = null
+
+        /** Retired mid-download: this radio kept failing, so leave it to the other one. */
+        @Volatile
+        var disabled: Boolean = false
     }
 
     private val stateLock = Any()
@@ -331,11 +336,11 @@ class MultiPathDownloader(
     private fun runWorker(runtime: LinkRuntime) {
         runtime.workers.incrementAndGet()
         try {
-            while (!cancelled.get() && fatal.get() == null) {
+            while (!cancelled.get() && fatal.get() == null && !runtime.disabled) {
                 val chunk = nextChunk() ?: break
                 var attempt = 0
                 while (true) {
-                    if (cancelled.get() || fatal.get() != null) {
+                    if (cancelled.get() || fatal.get() != null || runtime.disabled) {
                         requeue(chunk)
                         return
                     }
@@ -343,23 +348,37 @@ class MultiPathDownloader(
                         fetchChunk(runtime, chunk)
                         markCompleted(chunk)
                         runtime.error = null
+                        runtime.failures.set(0)
                         break
                     } catch (t: Throwable) {
                         if (cancelled.get()) {
                             requeue(chunk)
                             return
                         }
+                        val detail = t.message?.take(MAX_ERROR_CHARS) ?: t.javaClass.simpleName
+                        runtime.error = detail
+                        val linkFailures = runtime.failures.incrementAndGet()
+
+                        // One radio failing (blocked IP, no data left, 403 from that
+                        // carrier's exit node) must not kill the download: retire it and
+                        // hand the chunk to the other link.
+                        if (linkFailures >= MAX_LINK_FAILURES && hasOtherUsableLink(runtime)) {
+                            runtime.disabled = true
+                            resetAttempts(chunk)
+                            requeue(chunk)
+                            return
+                        }
+
                         attempt++
                         val total = synchronized(queueLock) {
                             val next = (attempts[chunk.index] ?: 0) + 1
                             attempts[chunk.index] = next
                             next
                         }
-                        runtime.error = t.message
                         if (total >= MAX_ATTEMPTS) {
                             fatal.compareAndSet(
                                 null,
-                                "Gave up on bytes ${chunk.start}-${chunk.end} after $total attempts: ${t.message}",
+                                "Gave up on bytes ${chunk.start}-${chunk.end} after $total attempts: $detail",
                             )
                             requeue(chunk)
                             return
@@ -375,7 +394,7 @@ class MultiPathDownloader(
                 }
             }
         } catch (t: Throwable) {
-            runtime.error = t.message
+            runtime.error = firstLine(t.message) ?: t.javaClass.simpleName
         } finally {
             runtime.workers.decrementAndGet()
             workersAlive.decrementAndGet()
@@ -394,7 +413,9 @@ class MultiPathDownloader(
         try {
             val code = connection.responseCode
             if (code == 200) throw IOException("The server ignored the Range header")
-            if (code != 206) throw IOException("HTTP $code for bytes ${chunk.start}-${chunk.end}")
+            if (code != 206) {
+                throw IOException(HttpUtil.describeResponse(connection, "bytes ${chunk.start}-${chunk.end}"))
+            }
 
             val buffer = ByteArray(BUFFER_SIZE)
             val input = connection.inputStream
@@ -463,6 +484,12 @@ class MultiPathDownloader(
             val empty = synchronized(queueLock) { pending.isEmpty() }
             if (workersAlive.get() <= 0) {
                 if (empty) break
+                if (snapshotRuntimes().none { !it.disabled }) {
+                    throw IOException(
+                        snapshotRuntimes().firstNotNullOfOrNull { it.error }
+                            ?: "Every network link stopped before the file was complete",
+                    )
+                }
                 if (!spawnRecoveryWorker()) {
                     throw IOException("Every download worker stopped before the file was complete")
                 }
@@ -492,17 +519,23 @@ class MultiPathDownloader(
      * requested split, hand the faster radio another worker (up to a small cap).
      */
     private fun adaptWorkerAllocation(wifiDelta: Long, mobileDelta: Long) {
-        val list = snapshotRuntimes()
-        if (list.size < 2) return
-        val wifi = list.firstOrNull { !it.handle.isMobile } ?: return
-        val mobile = list.firstOrNull { it.handle.isMobile } ?: return
+        val usable = snapshotRuntimes().filter { !it.disabled }
+        val cap = request.connectionsPerNetwork.coerceIn(1, 8) + 2
+        if (usable.size == 1) {
+            // The other radio was retired: push its share of the work onto the survivor.
+            val survivor = usable.first()
+            if (survivor.spawned.get() < cap) spawnWorker(survivor)
+            return
+        }
+        if (usable.size < 2) return
+        val wifi = usable.firstOrNull { !it.handle.isMobile } ?: return
+        val mobile = usable.firstOrNull { it.handle.isMobile } ?: return
 
         val total = wifiDelta + mobileDelta
         if (total <= 0L) return
 
         val actualShare = wifiDelta.toDouble() / total.toDouble()
         val targetShare = request.wifiWeight / 100.0
-        val cap = request.connectionsPerNetwork.coerceIn(1, 8) + 2
 
         if (actualShare < targetShare - 0.12 && wifi.spawned.get() < cap) {
             spawnWorker(wifi)
@@ -514,7 +547,7 @@ class MultiPathDownloader(
     private fun spawnRecoveryWorker(): Boolean {
         if (recoveryAttempts >= MAX_RECOVERY_WORKERS) return false
         val candidate = snapshotRuntimes()
-            .filter { it.error == null }
+            .filter { !it.disabled }
             .maxByOrNull { it.bytes.get() }
             ?: return false
         recoveryAttempts++
@@ -723,6 +756,7 @@ class MultiPathDownloader(
                         doneBytes = total,
                         speedBps = speed,
                         etaSeconds = eta,
+                        dualActive = snapshotRuntimes().count { !it.disabled } > 1,
                         links = buildLinkProgress(wifiSpeed, mobileSpeed),
                     )
                 }
@@ -766,6 +800,13 @@ class MultiPathDownloader(
     private fun runtimeBytes(isMobile: Boolean): Long =
         snapshotRuntimes().firstOrNull { it.handle.isMobile == isMobile }?.bytes?.get() ?: 0L
 
+    private fun hasOtherUsableLink(runtime: LinkRuntime): Boolean =
+        snapshotRuntimes().any { it !== runtime && !it.disabled }
+
+    private fun resetAttempts(chunk: Chunk) {
+        synchronized(queueLock) { attempts.remove(chunk.index) }
+    }
+
     private fun checkCancelled() {
         if (cancelled.get()) throw CancelledException()
     }
@@ -779,6 +820,8 @@ class MultiPathDownloader(
     private companion object {
         const val BUFFER_SIZE = 256 * 1024
         const val MAX_ATTEMPTS = 4
+        const val MAX_LINK_FAILURES = 3
+        const val MAX_ERROR_CHARS = 400
         const val MAX_RECOVERY_WORKERS = 8
         const val TICK_MS = 450L
         const val ADAPT_INTERVAL_MS = 4000L
