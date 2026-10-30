@@ -15,8 +15,10 @@ import okhttp3.Response
 import java.io.Closeable
 import java.io.IOException
 import java.io.InputStream
+import java.net.InetAddress
 import java.net.URL
 import java.net.URLDecoder
+import java.net.UnknownHostException
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.TimeUnit
 
@@ -100,10 +102,14 @@ object HttpUtil {
 
     private fun buildClient(network: Network): OkHttpClient {
         val socketFactory = network.socketFactory
-        val networkDns = Dns { hostname ->
-            val addresses = network.getAllByName(hostname)
-            if (addresses.isEmpty()) throw java.net.UnknownHostException(hostname)
-            addresses.toList()
+        // Explicit object rather than a SAM lambda: `Dns` is only a fun-interface in
+        // newer OkHttp releases, and this has to compile on 4.12 as well.
+        val networkDns = object : Dns {
+            override fun lookup(hostname: String): List<InetAddress> {
+                val addresses = network.getAllByName(hostname)
+                if (addresses.isEmpty()) throw UnknownHostException(hostname)
+                return addresses.toList()
+            }
         }
         return OkHttpClient.Builder()
             // Both of these are what keep the sockets on this radio and nowhere else.
