@@ -291,9 +291,10 @@ object HttpUtil {
     }
 
     private fun errorSnippet(exchange: HttpExchange): String? {
-        val body = exchange.response.body ?: return null
+        // `peekBody` copies without stealing the stream, so the body stays closed later.
+        if (exchange.response.body == null) return null
         return try {
-            body.peekBody(BODY_SNIPPET_BYTES).string()
+            exchange.response.peekBody(BODY_SNIPPET_BYTES).string()
                 .replace(Regex("\\s+"), " ")
                 .trim()
                 .take(BODY_SNIPPET_CHARS)
