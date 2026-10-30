@@ -394,22 +394,19 @@ internal object Socks5 {
         if ((header[0].toInt() and 0xFF) != VERSION) return null
         if ((header[1].toInt() and 0xFF) != CMD_CONNECT) return null
 
-        val high = input.read()
-        val low = input.read()
-        if (high < 0 || low < 0) return null
-        val port = ((high and 0xFF) shl 8) or (low and 0xFF)
-
-        return when (header[3].toInt() and 0xFF) {
+        // RFC 1928 order: VER, CMD, RSV, ATYP, DST.ADDR, DST.PORT. The address comes before
+        // the port, and its length depends on ATYP.
+        val address: Any = when (header[3].toInt() and 0xFF) {
             ATYP_IPV4 -> {
                 val raw = ByteArray(4)
                 if (!readFully(input, raw)) return null
-                SocksTarget.Ip(InetAddress.getByAddress(raw), port)
+                InetAddress.getByAddress(raw)
             }
 
             ATYP_IPV6 -> {
                 val raw = ByteArray(16)
                 if (!readFully(input, raw)) return null
-                SocksTarget.Ip(InetAddress.getByAddress(raw), port)
+                InetAddress.getByAddress(raw)
             }
 
             ATYP_DOMAIN -> {
@@ -417,10 +414,20 @@ internal object Socks5 {
                 if (length <= 0) return null
                 val raw = ByteArray(length)
                 if (!readFully(input, raw)) return null
-                SocksTarget.Host(String(raw, Charsets.UTF_8), port)
+                String(raw, Charsets.UTF_8)
             }
 
-            else -> null
+            else -> return null
+        }
+
+        val high = input.read()
+        val low = input.read()
+        if (high < 0 || low < 0) return null
+        val port = ((high and 0xFF) shl 8) or (low and 0xFF)
+
+        return when (address) {
+            is InetAddress -> SocksTarget.Ip(address, port)
+            else -> SocksTarget.Host(address as String, port)
         }
     }
 

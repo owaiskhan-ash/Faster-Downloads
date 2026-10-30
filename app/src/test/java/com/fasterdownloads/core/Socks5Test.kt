@@ -45,8 +45,11 @@ class Socks5Test {
     fun parsesADomainConnectRequest() {
         // VER=5 CMD=1 RSV=0 ATYP=3, len=11 "tracker.io", port 6969
         val name = "tracker.io"
-        val bytes = mutableListOf(5, 1, 0, 3, name.length, 0, 27)
+        val bytes = mutableListOf(5, 1, 0, 3, name.length)
         name.toByteArray().forEach { bytes.add(it.toInt() and 0xFF) }
+        // 6969 = 0x1B39, and the port always follows the address.
+        bytes.add(0x1B)
+        bytes.add(0x39)
         val target = Socks5.readTarget(ByteArrayInputStream(ByteArray(bytes.size) { bytes[it].toByte() }))
             as SocksTarget.Host
         assertEquals("tracker.io", target.host)
