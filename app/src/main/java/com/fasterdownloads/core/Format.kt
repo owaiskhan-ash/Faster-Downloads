@@ -21,6 +21,31 @@ fun formatBytes(bytes: Long): String {
 fun formatSpeed(bytesPerSecond: Long): String =
     if (bytesPerSecond <= 0L) "--" else "${formatBytes(bytesPerSecond)}/s"
 
+/**
+ * Percent share for each value, rounded so the parts add up to exactly 100.
+ *
+ * Used for the per-radio split ("Wi-Fi 62% · mobile 38%"): naive rounding would print
+ * 62% + 39% = 101%, which looks like a bug in a speed readout.
+ */
+fun linkShares(values: List<Long>): List<Int> {
+    if (values.isEmpty()) return emptyList()
+    val total = values.sumOf { value -> value.coerceAtLeast(0L) }
+    if (total <= 0L) return values.map { 0 }
+
+    val exact = values.map { value -> value.coerceAtLeast(0L).toDouble() * 100.0 / total }
+    val floors = exact.map { value -> value.toInt() }.toMutableList()
+    var remainder = 100 - floors.sum()
+
+    val byFraction = exact.indices.sortedByDescending { index -> exact[index] - floors[index] }
+    var cursor = 0
+    while (remainder > 0 && byFraction.isNotEmpty()) {
+        floors[byFraction[cursor % byFraction.size]] += 1
+        remainder--
+        cursor++
+    }
+    return floors
+}
+
 fun formatDuration(seconds: Long): String {
     if (seconds <= 0L) return "--"
     val hours = seconds / 3600

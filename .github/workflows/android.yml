@@ -195,6 +195,8 @@ jobs:
             go through a loopback SOCKS5 proxy that dials half of them on each radio.
           * Everything is downloaded into the app's folder, \`Download/FasterDownloads\`
             (multi-file torrents get a folder of their own inside it).
+          * Each download card shows what **Wi-Fi** and **mobile data** are delivering
+            separately - live speed and share of the total - for HTTP downloads and torrents.
           * Light and dark mode: neon-on-black inverts to black-on-neon with the system theme.
           * Resumes interrupted transfers chunk-by-chunk and verifies the finished file.
           * Runs in a foreground service with one aggregated progress notification and a

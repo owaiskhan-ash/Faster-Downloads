@@ -3,6 +3,28 @@
 All notable changes to this project are documented here.
 This project follows [Semantic Versioning](https://semver.org/).
 
+## [0.9.0] - 2026-10-30
+
+### Added
+- **Per-radio speed readout on every download card.** Wi-Fi and mobile data each get a row with
+  their own live speed and the percentage of the total they are carrying:
+
+  ```
+  WI-FI + MOBILE DATA                    6.8 MB/s
+  ● Wi-Fi          62%                   4.2 MB/s
+  ● Mobile data    38%                   2.6 MB/s
+  ```
+
+  For HTTP downloads the numbers come from each radio's own byte counter. For torrents they come
+  from the bonding proxy, which now samples the bytes it moves per link once a second and
+  smooths them - so a magnet shows what each radio is pulling, not just a connection count.
+- Shares are rounded so they always add up to exactly 100 %.
+
+### Changed
+- The old one-line "Wi-Fi 4.2 MB/s · Mobile data 2.6 MB/s" status text is replaced by that
+  block, and torrents get it too (they used to show connections only).
+- Torrent diagnostics keep the connection count per radio, now with the rate when there is one.
+
 ## [0.8.0] - 2026-10-30
 
 ### Added

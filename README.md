@@ -80,6 +80,8 @@ More detail: [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
 - **Magnet links**: `magnet:?xt=urn:btih:...` downloads on libtorrent (UDP/HTTP trackers,
   DHT, PeX, µTP), and the app registers as a magnet handler so links open straight from the
   browser
+- **Per-radio speed readout**: Wi-Fi and mobile data each show their own live speed and the
+  share of the total they carry - for HTTP downloads and for bonded torrents alike
 - Windowed (3 s) speed and ETA readout, so the number is readable instead of jittery
 - **Always bonded**: Wi-Fi + mobile data, 50/50 split, 8 parallel range requests per radio -
   there is nothing to configure and no way to accidentally run single-link

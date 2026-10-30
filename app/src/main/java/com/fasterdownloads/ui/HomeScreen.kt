@@ -6,6 +6,7 @@ import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
@@ -27,9 +28,11 @@ import com.fasterdownloads.core.DownloadKind
 import com.fasterdownloads.core.DownloadPhase
 import com.fasterdownloads.core.DownloadRequest
 import com.fasterdownloads.core.DownloadUiState
+import com.fasterdownloads.core.LinkProgress
 import com.fasterdownloads.core.formatBytes
 import com.fasterdownloads.core.formatDuration
 import com.fasterdownloads.core.formatSpeed
+import com.fasterdownloads.core.linkShares
 import com.fasterdownloads.service.DownloadService
 
 private const val SAMPLE_URL = "https://speed.hetzner.de/100MB.bin"
@@ -385,19 +388,9 @@ private fun DownloadCard(
             }
         }
 
-        // Status line for the two radios: this is the bonding working, not a setting.
-        if (state.kind == DownloadKind.HTTP && state.links.any { it.active || it.bytes > 0L }) {
-            Text(
-                text = state.links.joinToString("  \u00b7  ") { link ->
-                    val speed = if (link.active) formatSpeed(link.speedBps) else "idle"
-                    "${link.label} $speed"
-                },
-                style = MaterialTheme.typography.labelSmall,
-                color = fg.copy(alpha = 0.5f),
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis,
-            )
-        }
+        // What each radio is delivering right now. This is the point of the app, so it gets
+        // its own block: Wi-Fi and mobile data, with the share each one carries.
+        LinkSpeeds(state.links)
 
         if (state.kind == DownloadKind.TORRENT) {
             state.diagnostics?.takeIf { it.isNotBlank() }?.let { detail ->
@@ -492,6 +485,72 @@ private fun ActionButton(
             modifier = modifier.height(44.dp),
         ) {
             Text(text, style = MaterialTheme.typography.labelLarge)
+        }
+    }
+}
+
+/**
+ * Per-radio download speed: Wi-Fi on one row, mobile data on the other, each with the share of
+ * the total it is carrying. Rendered for HTTP downloads and for bonded torrents alike - the
+ * numbers come from the engine in both cases, never from a guess.
+ */
+@Composable
+private fun LinkSpeeds(links: List<LinkProgress>) {
+    val fg = MaterialTheme.colorScheme.onBackground
+    val active = links.filter { it.active }
+    if (active.isEmpty()) return
+
+    val shares = linkShares(active.map { link -> link.speedBps })
+    val total = active.sumOf { link -> link.speedBps }
+
+    Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Text(
+                text = "WI-FI + MOBILE DATA",
+                style = MaterialTheme.typography.labelSmall,
+                color = fg.copy(alpha = 0.55f),
+                modifier = Modifier.weight(1f),
+            )
+            Text(
+                text = formatSpeed(total),
+                style = MaterialTheme.typography.labelSmall,
+                color = fg.copy(alpha = 0.55f),
+                fontFamily = FontFamily.Monospace,
+            )
+        }
+
+        active.forEachIndexed { index, link ->
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
+                Box(
+                    modifier = Modifier
+                        .size(7.dp)
+                        .clip(CircleShape)
+                        .background(if (link.speedBps > 0L) fg else fg.copy(alpha = 0.3f)),
+                )
+                Text(
+                    text = link.label,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = fg.copy(alpha = 0.8f),
+                    modifier = Modifier.weight(1f),
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
+                Text(
+                    text = "${shares.getOrElse(index) { 0 }}%",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = fg.copy(alpha = 0.5f),
+                    fontFamily = FontFamily.Monospace,
+                )
+                Text(
+                    text = formatSpeed(link.speedBps),
+                    style = MaterialTheme.typography.titleSmall,
+                    fontFamily = FontFamily.Monospace,
+                )
+            }
         }
     }
 }
