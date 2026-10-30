@@ -41,7 +41,7 @@ class MainActivity : ComponentActivity() {
         handleIntent(intent)
         // Warm the BitTorrent engine up while the user is still typing: DHT bootstrap takes
         // tens of seconds, and doing it in advance is what makes the first magnet quick.
-        lifecycleScope.launch(Dispatchers.IO) { TorrentEngine.warmUp() }
+        lifecycleScope.launch(Dispatchers.IO) { TorrentEngine.warmUp(this@MainActivity) }
         setContent {
             val mode by ThemePreference.mode.collectAsState()
             val systemNight = isSystemInDarkTheme()

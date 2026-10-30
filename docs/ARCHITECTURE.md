@@ -188,9 +188,37 @@ Three collisions with reality are handled explicitly:
   torrent engine could not start on this device", never as a download error. CI verifies the
   `.so` is present for every ABI in `abiFilters`, because that failure only shows up on device.
 
-Single-file payloads are published through the same MediaStore path as HTTP downloads;
-multi-file payloads stay in the torrent folder. The native engine takes the APK from 9.1 MB to
+Single-file payloads are published through the same MediaStore path as HTTP downloads, and
+multi-file payloads are published file by file into `Download/FasterDownloads/<torrent name>/`
+(structure preserved), so nothing is left in app-private storage. The native engine takes the APK from 9.1 MB to
 18.9 MB, most of it `libtorrent4j.so` for two ABIs.
+
+## 7c. Bonding a torrent across both radios
+
+libtorrent opens its peer sockets inside native code, and Android exposes no hook to pin a
+native socket to a radio (`bindSocket` is Java-side, `SO_BINDTODEVICE` needs root). What
+libtorrent *can* do is send every peer and tracker TCP connection to a SOCKS5 proxy, so the app
+runs one on loopback and answers each `CONNECT` itself:
+
+```
+libtorrent --TCP--> 127.0.0.1:<port> [BondingProxy] --+--> Network(WIFI)     -> peer A
+         (SOCKS5 CONNECT per peer)                    +--> Network(CELLULAR) -> peer B
+```
+
+* `BondingProxy.startAsync()` asks `NetworkLinks` for both radios (the cellular request can
+  take seconds or time out without a SIM, hence async). It only activates with **two** links.
+* `TorrentEngine` then points the live session at the proxy with `applySettings` - no session
+  restart, so torrents that were already running simply pick it up for new connections.
+* `pickLink()` hands each new connection to the link with the fewest open connections relative
+  to its share; the share is re-measured every 4 s from the bytes each radio actually moved
+  (60/40 smoothing, bounded to 20-80 %), which mirrors the HTTP engine's adaptive weighting.
+* Only CONNECT is implemented (RFC 1928), no authentication, IPv4/IPv6/domain targets. Domain
+  names are resolved through the chosen `Network`, so DNS follows the radio too.
+* DHT and UDP trackers ride the default network underneath - they are not proxyable over SOCKS5
+  and they are the safety net: if the proxy were broken, discovery would still work.
+* The safety valve: a torrent that sees **zero peers for 25 s** while bonded calls
+  `TorrentEngine.disableBonding()`, which applies `proxy_type = none` to the live session and
+  says so in the card. Bonding stays off until the session restarts.
 
 ## 8. Several downloads, pause, and the service
 
@@ -234,4 +262,6 @@ which picks the data up again (HTTP from the journal, BitTorrent by re-checking 
 | Magnet with no peers | Fails after 180 s, reporting peers / seeds / DHT nodes |
 | Four or more downloads added | The extra ones wait as `QUEUED` and start as slots free |
 | User pauses | Engines drop their sockets, partial data + journal kept, state `PAUSED` |
-| Magnet cancelled | `session.stop()`, partial data stays in the torrent folder |
+| No peer through the bonding proxy | Bonding switched off for the session after 25 s, card says so |
+| Only one radio available | Proxy never starts; torrents run on the default network |
+| Magnet cancelled | torrent removed from the session, partial data kept in the torrent folder |

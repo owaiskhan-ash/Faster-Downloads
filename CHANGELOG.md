@@ -3,6 +3,33 @@
 All notable changes to this project are documented here.
 This project follows [Semantic Versioning](https://semver.org/).
 
+## [0.8.0] - 2026-10-30
+
+### Added
+- **Magnet links are bonded across both radios.** libtorrent's peer connections now go through
+  a loopback **SOCKS5 proxy** (`BondingProxy`) that the app runs; each `CONNECT` is dialled on
+  Wi-Fi or on mobile data, weighted by what each radio is actually delivering (re-measured every
+  4 s, bounded 20-80 %). A swarm keeps dozens of connections open, so half use each radio and
+  the torrent's throughput becomes the sum of the two links - the HTTP split applied per
+  connection instead of per byte range. IPv4, IPv6 and domain targets, DNS resolved through the
+  chosen radio, no authentication.
+- The download card shows the split: `bonded: Wi-Fi 12 conns · mobile 9 conns`.
+- Safety valve: a torrent that sees **no peers for 25 s** while bonded turns bonding off for the
+  session (`proxy_type = none` applied live) and says so, so the proxy can never leave a
+  download stranded. DHT and UDP trackers were never proxied, so discovery keeps working.
+
+### Changed
+- **Everything is published to the app's folder, `Download/FasterDownloads`.** Multi-file
+  torrents used to stay in app-private storage; they are now copied into
+  `Download/FasterDownloads/<torrent name>/...` with their structure intact, and the private
+  copies are removed.
+- The Torrent card no longer says bonding is HTTP-only.
+
+### Notes
+- Bonding needs two radios; with a single link the proxy is never started and torrents use the
+  default network as before.
+- uTP gives way to TCP for peer connections while bonded (SOCKS5 carries TCP only).
+
 ## [0.7.0] - 2026-10-30
 
 ### Added
