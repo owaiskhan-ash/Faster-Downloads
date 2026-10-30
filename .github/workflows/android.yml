@@ -1,0 +1,196 @@
+name: Android CI
+
+on:
+  push:
+    branches: [ 'main', 'arena/**' ]
+    tags: [ 'v*' ]
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    name: Assemble APK
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Set up Gradle
+        uses: gradle/actions/setup-gradle@v4
+
+      - name: Unit tests
+        run: |
+          set -o pipefail
+          ./gradlew --no-daemon :app:testDebugUnitTest 2>&1 | tee build.log
+
+      - name: Assemble debug APK
+        run: |
+          set -o pipefail
+          ./gradlew --no-daemon :app:assembleDebug 2>&1 | tee -a build.log
+
+      - name: Assemble release APK
+        if: success()
+        run: |
+          set -o pipefail
+          ./gradlew --no-daemon :app:assembleRelease 2>&1 | tee -a build.log
+
+      - name: Upload debug APK
+        if: success()
+        uses: actions/upload-artifact@v4
+        with:
+          name: faster-downloads-debug
+          path: app/build/outputs/apk/debug/*.apk
+          if-no-files-found: warn
+
+      - name: Upload release APK
+        if: success()
+        uses: actions/upload-artifact@v4
+        with:
+          name: faster-downloads-release
+          path: app/build/outputs/apk/release/*.apk
+          if-no-files-found: warn
+
+      - name: Inspect release APK
+        if: success()
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          APK=$(ls app/build/outputs/apk/release/*.apk | head -1)
+          BT=$(ls -d "$ANDROID_HOME"/build-tools/*/ | sort -V | tail -1)
+          {
+            echo "### Release APK inspection"
+            echo '```'
+            ls -l "$APK"
+            "${BT}apksigner" verify --print-certs "$APK" 2>&1 | head -15
+            "${BT}aapt2" dump badging "$APK" 2>&1 | head -12
+            echo '```'
+          } > inspect.md
+          cat inspect.md >> "$GITHUB_STEP_SUMMARY"
+          gh api -X POST "repos/${GITHUB_REPOSITORY}/commits/${GITHUB_SHA}/comments" -F body=@inspect.md || true
+
+      # The sandbox that drives this repo cannot read Actions logs, so failures are
+      # posted back as a commit comment where they can be picked up over the API.
+      - name: Report build failure
+        if: failure()
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          {
+            echo "### Build failed for ${GITHUB_SHA}"
+            echo '```'
+            grep -E "^e: |^w: file|FAILURE:|What went wrong|> Task .* FAILED|error: |Caused by:" -A 3 build.log | head -200
+            echo
+            echo "--- tail ---"
+            tail -c 10000 build.log
+            echo '```'
+          } > report.md
+          gh api -X POST "repos/${GITHUB_REPOSITORY}/commits/${GITHUB_SHA}/comments" -F body=@report.md || echo "could not post report"
+
+  release:
+    name: Publish GitHub release
+    needs: build
+    if: startsWith(github.ref, 'refs/tags/v') || contains(github.event.head_commit.message, '[release]')
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Set up Gradle
+        uses: gradle/actions/setup-gradle@v4
+
+      - name: Restore signing key (optional)
+        env:
+          KEYSTORE_BASE64: ${{ secrets.KEYSTORE_BASE64 }}
+        run: |
+          if [ -n "$KEYSTORE_BASE64" ]; then
+            echo "$KEYSTORE_BASE64" | base64 -d > release.keystore
+            echo "KEYSTORE_PATH=$PWD/release.keystore" >> "$GITHUB_ENV"
+          else
+            echo "No KEYSTORE_BASE64 secret: the release APK is signed with the debug key."
+          fi
+
+      - name: Assemble release APK
+        env:
+          KEYSTORE_PASSWORD: ${{ secrets.KEYSTORE_PASSWORD }}
+          KEY_ALIAS: ${{ secrets.KEY_ALIAS }}
+          KEY_PASSWORD: ${{ secrets.KEY_PASSWORD }}
+        run: |
+          set -o pipefail
+          ./gradlew --no-daemon :app:assembleRelease 2>&1 | tee release.log
+
+      - name: Publish release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          KEYSTORE_BASE64: ${{ secrets.KEYSTORE_BASE64 }}
+        run: |
+          set -euo pipefail
+          VERSION=$(grep -oP 'versionName\s*=\s*"\K[^"]+' app/build.gradle.kts | head -1)
+          TAG="v${VERSION}"
+          APK=$(ls app/build/outputs/apk/release/*.apk | head -1)
+          cp "$APK" "FasterDownloads-${VERSION}.apk"
+          if [ -n "${KEYSTORE_BASE64}" ]; then SIGNED="signed with the project release key"; else SIGNED="debug-signed (fine for sideloading, not for a Play upload)"; fi
+          cat > notes.md <<EOF
+          ## Faster Downloads ${VERSION}
+
+          One file, two radios: chunks are split with HTTP \`Range\` requests and pulled over
+          Wi-Fi and mobile data at the same time using Android's \`ConnectivityManager\` /
+          \`Network\` APIs.
+
+          **Install:** download \`FasterDownloads-${VERSION}.apk\` and open it (allow
+          "install unknown apps" for your browser or file manager first).
+
+          * minSdk 26 (Android 8.0) - targetSdk 35
+          * Build type: release, ${SIGNED}
+          * SHA-256 of the APK: \`$(sha256sum "FasterDownloads-${VERSION}.apk" | cut -d' ' -f1)\`
+
+          ### What it does
+          * Requests a Wi-Fi *and* a cellular network at the same time and pins each
+            socket group to its radio with \`Network.openConnection\`.
+          * Splits the file into ranged chunks served by a shared queue, so a slow link
+            never blocks the other one, with a weighted Wi-Fi/mobile split (default 70/30).
+          * Resumes interrupted transfers chunk-by-chunk and verifies the finished file.
+          * Runs in a foreground service with progress notification and cancel action.
+
+          ### Caveats
+          * The host must support \`Range\` requests, otherwise it falls back to one connection.
+          * Some OEM skins restrict dual-network usage; behaviour varies by device.
+          * Bonded mode really consumes mobile data.
+          EOF
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            gh release upload "$TAG" "FasterDownloads-${VERSION}.apk" --clobber
+          else
+            gh release create "$TAG" "FasterDownloads-${VERSION}.apk" \
+              --title "Faster Downloads ${VERSION}" \
+              --notes-file notes.md \
+              --target "${GITHUB_SHA}"
+          fi
+
+      - name: Report release failure
+        if: failure()
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          {
+            echo "### Release job failed for ${GITHUB_SHA}"
+            echo '```'
+            tail -c 10000 release.log 2>/dev/null || echo "no release.log"
+            echo '```'
+          } > report.md
+          gh api -X POST "repos/${GITHUB_REPOSITORY}/commits/${GITHUB_SHA}/comments" -F body=@report.md || echo "could not post report"
