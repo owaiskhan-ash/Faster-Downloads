@@ -3,6 +3,24 @@
 All notable changes to this project are documented here.
 This project follows [Semantic Versioning](https://semver.org/).
 
+## [0.4.1] - 2026-10-30
+
+### Fixed
+- **Magnet downloads still failed on device with
+  `No virtual method getAnnotatedSuperclass()Ljava/lang/reflect/AnnotatedType;`.** `bt` 1.10
+  depends on Guice 5.0.1, and Guice 5's `BindingSourceRestriction.getPermits()` calls
+  `Class.getAnnotatedSuperclass()`, which Android's `java.lang.Class` does not implement at
+  *any* API level. Creating the torrent client therefore died before the swarm was joined,
+  and the engine's error surfaced verbatim in the download card.
+  Guice is now pinned to **4.2.3** (which contains no such class), with
+  `guice-multibindings:4.2.3` added because `Multibinder`/`MapBinder` live in a separate
+  artifact before 5.0. The exclusion plus a resolution `force` means no transitive request
+  can pull Guice 5 back in, and CI now fails the build if `BindingSourceRestriction` appears
+  in the release APK's dex.
+- Engine start-up failures that arrive as `LinkageError` (a missing JVM method) are reported
+  as "The torrent engine could not start on this device: ..." rather than as a raw JVM
+  message.
+
 ## [0.4.0] - 2026-10-30
 
 ### Added

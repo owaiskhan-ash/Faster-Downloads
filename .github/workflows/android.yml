@@ -69,6 +69,19 @@ jobs:
         run: |
           APK=$(ls app/build/outputs/apk/release/*.apk | head -1)
           BT=$(ls -d "$ANDROID_HOME"/build-tools/*/ | sort -V | tail -1)
+          # Guice 5 ships BindingSourceRestriction, which calls
+          # Class.getAnnotatedSuperclass() - a method Android's java.lang.Class simply does
+          # not implement. It kills every magnet download with NoSuchMethodError, so treat
+          # any trace of it in the APK as a build failure.
+          if unzip -p "$APK" 'classes*.dex' | grep -aq "BindingSourceRestriction"; then
+            echo "::error::Guice 5 leaked into the APK (BindingSourceRestriction is Android-incompatible)"
+            exit 1
+          fi
+          # ...and the 4.x replacement must be there, or bt's modules cannot be installed.
+          if ! unzip -p "$APK" 'classes*.dex' | grep -aq "Lcom/google/inject/multibindings/Multibinder;"; then
+            echo "::error::guice-multibindings is missing from the APK; bt installs its modules with Multibinder"
+            exit 1
+          fi
           {
             echo "### Release APK inspection"
             echo '```'
