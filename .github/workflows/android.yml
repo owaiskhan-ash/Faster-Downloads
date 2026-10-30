@@ -77,6 +77,11 @@ jobs:
             echo "::error::Guice 5 leaked into the APK (BindingSourceRestriction is Android-incompatible)"
             exit 1
           fi
+          # ...and the 4.x replacement must be there, or bt's modules cannot be installed.
+          if ! unzip -p "$APK" 'classes*.dex' | grep -aq "Lcom/google/inject/multibindings/Multibinder;"; then
+            echo "::error::guice-multibindings is missing from the APK; bt installs its modules with Multibinder"
+            exit 1
+          fi
           {
             echo "### Release APK inspection"
             echo '```'
