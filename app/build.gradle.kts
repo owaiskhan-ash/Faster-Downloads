@@ -63,6 +63,12 @@ android {
     packaging {
         resources {
             excludes += "/META-INF/{AL2.0,LGPL2.1}"
+            // The BitTorrent library pulls in several Apache-style licenses/notices.
+            excludes += "/META-INF/DEPENDENCIES"
+            excludes += "/META-INF/LICENSE*"
+            excludes += "/META-INF/NOTICE*"
+            excludes += "/META-INF/INDEX.LIST"
+            // Keep META-INF/services/*: bt discovers its modules through ServiceLoader.
         }
     }
 }
