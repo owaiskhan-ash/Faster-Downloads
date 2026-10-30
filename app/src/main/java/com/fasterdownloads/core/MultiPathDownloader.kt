@@ -64,9 +64,16 @@ class MultiPathDownloader(
     }
 
     private val stateLock = Any()
-    private var state = DownloadUiState(url = request.url, fileName = request.fileName)
+    private var state = DownloadUiState(
+        id = request.id,
+        url = request.url,
+        fileName = request.fileName,
+    )
 
     private val cancelled = AtomicBoolean(false)
+
+    /** Distinguishes "stop, I will resume later" from "throw this away". */
+    private val paused = AtomicBoolean(false)
     private val fatal = AtomicReference<String?>(null)
     private val tickerStop = AtomicBoolean(false)
 
@@ -103,9 +110,21 @@ class MultiPathDownloader(
     private var lastResumeSave = 0L
 
     override fun cancel() {
+        stopEngines()
+    }
+
+    override fun pause() {
+        paused.set(true)
+        stopEngines()
+    }
+
+    /**
+     * Sets the stop flag and drops the sockets that are mid-read, so a blocked read fails
+     * immediately instead of waiting for its timeout. The partial file and its journal stay
+     * on disk either way.
+     */
+    private fun stopEngines() {
         cancelled.set(true)
-        // Cancelling the calls makes an in-flight read fail immediately instead of
-        // waiting for the read timeout.
         val open = synchronized(activeExchanges) { activeExchanges.toList() }
         open.forEach { exchange -> exchange.cancel() }
     }
@@ -153,6 +172,17 @@ class MultiPathDownloader(
             return finalizeDownload()
         } catch (c: CancelledException) {
             cleanupAfterFailure(keepPartial = true)
+            if (paused.get()) {
+                return emitState {
+                    it.copy(
+                        phase = DownloadPhase.PAUSED,
+                        speedBps = 0L,
+                        etaSeconds = 0L,
+                        message = "Paused at ${(it.progress * 100f).toInt()}% - tap resume to continue",
+                        error = null,
+                    )
+                }
+            }
             return emitState {
                 it.copy(phase = DownloadPhase.CANCELLED, message = "Download cancelled", error = null)
             }

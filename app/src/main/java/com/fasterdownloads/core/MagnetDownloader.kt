@@ -13,25 +13,18 @@ import java.util.concurrent.atomic.AtomicBoolean
 /**
  * BitTorrent downloads for `magnet:` links, driven by **libtorrent** through libtorrent4j.
  *
- * This is the same engine LibreTorrent, FrostWire and TorrDroid run: a native C++ BitTorrent
- * implementation, not a Java reimplementation of one. What that buys, and why the previous
- * Java-only engine could not get past "looking for peers":
+ * This is the engine LibreTorrent, FrostWire and TorrDroid run: a native C++ BitTorrent
+ * implementation with UDP trackers (BEP-15), DHT, PeX, LSD, µTP and encryption. The session
+ * itself is shared and kept warm by [TorrentEngine] - see there for why that matters for the
+ * "fetching metadata" wait.
  *
- *  * **UDP trackers (BEP 15).** Most public trackers are `udp://`, and the Java engine could
- *    only speak HTTP to trackers.
- *  * **DHT** that actually walks the routing table, re-bootstraps and stores peers, plus
- *    **PeX** and **LSD**, so metadata can arrive from peers discovered after the announce.
- *  * **uTP** and TCP with real connection management, encryption, and NAT-PMP/UPnP.
- *
- * The engine owns the swarm; this class owns the *user-visible* part of the job: it feeds
- * libtorrent the sanitised magnet link, polls the torrent status for progress, and turns that
- * into [DownloadUiState]. Everything shown is a real number from libtorrent (peers, seeds,
- * DHT nodes, rate) - never a guess - so a stuck download says why it is stuck instead of
- * spinning forever.
+ * This class owns one torrent inside that session: it hands libtorrent the sanitised magnet,
+ * forces an immediate announce instead of waiting for the tracker timer, polls the torrent
+ * status for progress, and removes the torrent when the job ends (paused data stays on disk).
  *
  * Note: torrent traffic uses the device's default network. Only the HTTP engine can bond
- * Wi-Fi and mobile data, because a swarm's thousands of peer sockets cannot meaningfully be
- * split across two radios.
+ * Wi-Fi and mobile data, because a swarm's peer sockets cannot meaningfully be split across
+ * two radios.
  */
 class MagnetDownloader(
     private val context: Context,
@@ -41,6 +34,7 @@ class MagnetDownloader(
 
     private val stateLock = Any()
     private var state = DownloadUiState(
+        id = request.id,
         url = request.url,
         kind = DownloadKind.TORRENT,
         message = "Reading magnet link...",
@@ -48,7 +42,9 @@ class MagnetDownloader(
 
     private val cancelled = AtomicBoolean(false)
 
-    /** The native session; created on the engine thread, torn down there too. */
+    /** Distinguishes "stop, I will resume later" from "throw this away". */
+    private val paused = AtomicBoolean(false)
+
     @Volatile
     private var session: SessionManager? = null
 
@@ -62,9 +58,14 @@ class MagnetDownloader(
 
     override fun cancel() {
         cancelled.set(true)
-        // Unblocking only: the poll loop notices the flag within one tick, and the session
-        // itself is stopped by run() on its own thread (stop() blocks).
+        // Unblocking only: the poll loop notices the flag within one tick, and the torrent
+        // is removed by run() on its own thread.
         runCatching { torrent?.pause() }
+    }
+
+    override fun pause() {
+        paused.set(true)
+        cancel()
     }
 
     override fun run(): DownloadUiState {
@@ -88,16 +89,17 @@ class MagnetDownloader(
                 )
             }
 
-            manager = SessionManager()
-            // start() boots the native session: DHT with bootstrap nodes, the alert loop,
-            // tracker/DHT/LSD/PeX managers and the µTP transport.
-            manager.start()
+            // Shared, already-warm session: DHT is up before the magnet is even added.
+            manager = TorrentEngine.acquire()
             session = manager
 
-            if (cancelled.get()) return cancelledState()
+            if (cancelled.get()) return stopState()
 
-            // The rebuilt URI, not the raw text: see MagnetLink.toMagnetUri().
-            manager.download(magnet.toMagnetUri(), targetDir, TorrentFlags.AUTO_MANAGED)
+            // A link with one or two trackers gets a few open ones appended, so peer
+            // discovery is not a single point of failure. Links with their own healthy
+            // tracker list are left untouched.
+            val extras = DefaultTrackers.extrasFor(magnet.trackers)
+            manager.download(magnet.toMagnetUri(extras), targetDir, TorrentFlags.AUTO_MANAGED)
 
             emitState {
                 it.copy(
@@ -105,20 +107,19 @@ class MagnetDownloader(
                     message = if (magnet.trackers.isEmpty()) {
                         "Joining the swarm over DHT..."
                     } else {
-                        "Announcing to ${magnet.trackers.size} tracker(s) and DHT..."
+                        "Announcing to ${magnet.trackers.size + extras.size} trackers and DHT..."
                     },
                 )
             }
 
-            val premature = pump(manager, Sha1Hash.parseHex(magnet.infoHashHex), magnet)
+            val premature = pump(manager, Sha1Hash.parseHex(magnet.infoHashHex), magnet, extras)
             if (premature != null) return premature
             return finish(targetDir, existing)
         } catch (t: Throwable) {
-            if (cancelled.get()) return cancelledState()
+            if (cancelled.get()) return stopState()
             val reason = when (t) {
-                // Missing/swapped native library: UnsatisfiedLinkError is a LinkageError,
-                // and both mean the engine is absent or built for another ABI - an install
-                // problem, not a download problem.
+                // UnsatisfiedLinkError is a LinkageError: the native engine is absent or
+                // built for another ABI - an install problem, not a download problem.
                 is LinkageError -> "The torrent engine could not start on this device " +
                     "(${describeFailure(t)}). Reinstall from the official APK - the engine " +
                     "is native code and this build ships arm64/armv7."
@@ -137,27 +138,39 @@ class MagnetDownloader(
                 )
             }
         } finally {
-            runCatching { torrent?.pause() }
-            torrent = null
+            detachTorrent()
             session = null
-            // Blocks while the native session winds down; this thread is a background one.
-            runCatching { manager?.stop() }
+            // Give the session back to the shared pool (it stops itself once idle).
+            runCatching { TorrentEngine.release() }
+        }
+    }
+
+    /** Removes this torrent from the session, keeping whatever is already on disk. */
+    private fun detachTorrent() {
+        val handle = torrent
+        val manager = session
+        torrent = null
+        if (handle != null && manager != null) {
+            runCatching { handle.pause() }
+            runCatching { manager.remove(handle) }
         }
     }
 
     /**
-     * Polls the torrent until it finishes, the transfer becomes impossible, or we are
-     * cancelled. Returns null when the torrent completed, or the terminal state to return
+     * Polls the torrent until it finishes, the transfer becomes impossible, or the user
+     * stops it. Returns null when the torrent completed, or the terminal state to return
      * when it did not.
      */
     private fun pump(
         manager: SessionManager,
         hash: Sha1Hash,
         magnet: MagnetLink,
+        extras: List<String>,
     ): DownloadUiState? {
         val startedAt = SystemClock.elapsedRealtime()
         var discovered: TorrentHandle? = null
-        var announcedOnce = false
+        var prepared = false
+        var lastReannounce = 0L
 
         while (!cancelled.get()) {
             val elapsed = SystemClock.elapsedRealtime() - startedAt
@@ -192,13 +205,21 @@ class MagnetDownloader(
                 continue
             }
 
-            // A torrent added from a magnet may come in paused; asking once is enough.
-            if (!announcedOnce) {
-                announcedOnce = true
+            val hasMetadata = runCatching { status.hasMetadata() }.getOrDefault(false)
+
+            if (!prepared) {
+                prepared = true
+                // Do not wait for libtorrent's announce timer: ask every tracker the moment
+                // the torrent exists. This is the biggest single win on metadata latency.
                 runCatching { handle.resume() }
+                runCatching { handle.forceReannounce() }
+                lastReannounce = elapsed
+            } else if (!hasMetadata && elapsed - lastReannounce > REANNOUNCE_INTERVAL_MS) {
+                // Still no metadata: keep the tracker announce going while DHT catches up.
+                lastReannounce = elapsed
+                runCatching { handle.forceReannounce() }
             }
 
-            val hasMetadata = runCatching { status.hasMetadata() }.getOrDefault(false)
             if (hasMetadata) {
                 val wanted = runCatching { status.totalWanted() }.getOrDefault(0L)
                 val total = if (wanted > 0L) wanted else runCatching { status.total() }.getOrDefault(0L)
@@ -219,7 +240,7 @@ class MagnetDownloader(
             val finished = runCatching { status.isFinished() }.getOrDefault(false) ||
                 (hasMetadata && totalBytes > 0L && done >= totalBytes)
 
-            val diagnostics = describe(manager, status, magnet, peers, seeds)
+            val diagnostics = describe(manager, status, magnet, extras, peers, seeds)
             val eta = if (rate > 0L && totalBytes > done) (totalBytes - done) / rate else 0L
 
             emitState {
@@ -241,7 +262,7 @@ class MagnetDownloader(
             if (finished) return null
 
             if (!hasMetadata && elapsed > METADATA_TIMEOUT_MS) {
-                return fail(metadataTimeoutMessage(magnet, peers, diagnostics), magnet, status)
+                return fail(metadataTimeoutMessage(magnet, extras, peers, diagnostics), magnet, status)
             }
             if (hasMetadata && done <= 0L && elapsed > STALL_TIMEOUT_MS) {
                 return fail(
@@ -255,7 +276,7 @@ class MagnetDownloader(
 
             sleep(POLL_INTERVAL_MS)
         }
-        return cancelledState()
+        return stopState()
     }
 
     private fun messageFor(hasMetadata: Boolean, peers: Int, seeds: Int, finished: Boolean): String =
@@ -275,6 +296,7 @@ class MagnetDownloader(
         manager: SessionManager,
         status: TorrentStatus,
         magnet: MagnetLink,
+        extras: List<String>,
         peers: Int,
         seeds: Int,
     ): String {
@@ -284,9 +306,8 @@ class MagnetDownloader(
         parts += "DHT $dhtNodes node" + (if (dhtNodes == 1L) "" else "s")
         parts += "$peers peer" + (if (peers == 1) "" else "s")
         if (seeds > 0) parts += "$seeds seed" + (if (seeds == 1) "" else "s")
-        if (magnet.trackers.isNotEmpty()) {
-            parts += "${magnet.trackers.size} tracker" + (if (magnet.trackers.size == 1) "" else "s")
-        }
+        val trackers = magnet.trackers.size + extras.size
+        if (trackers > 0) parts += "$trackers tracker" + (if (trackers == 1) "" else "s")
         return parts.joinToString(" \u00b7 ")
     }
 
@@ -299,10 +320,16 @@ class MagnetDownloader(
         else -> "waiting"
     }
 
-    private fun metadataTimeoutMessage(magnet: MagnetLink, peers: Int, diagnostics: String): String {
+    private fun metadataTimeoutMessage(
+        magnet: MagnetLink,
+        extras: List<String>,
+        peers: Int,
+        diagnostics: String,
+    ): String {
+        val trackers = magnet.trackers.size + extras.size
         val trackerNote = when {
-            magnet.trackers.isEmpty() -> "The link lists no trackers at all, so DHT is the only way in. "
-            else -> "The link's ${magnet.trackers.size} tracker(s) have not produced a peer. "
+            trackers == 0 -> "The link lists no trackers at all, so DHT is the only way in. "
+            else -> "None of the $trackers tracker(s) produced a peer. "
         }
         return buildString {
             append("No peer returned the torrent metadata within ")
@@ -318,7 +345,7 @@ class MagnetDownloader(
         val manager = session
         val diagnostics = if (status != null && manager != null) {
             runCatching {
-                describe(manager, status, magnet, status.numPeers(), status.numSeeds())
+                describe(manager, status, magnet, emptyList(), status.numPeers(), status.numSeeds())
             }.getOrNull()
         } else {
             null
@@ -335,12 +362,23 @@ class MagnetDownloader(
         }
     }
 
-    private fun cancelledState(): DownloadUiState = emitState {
-        it.copy(
-            phase = DownloadPhase.CANCELLED,
-            message = "Download cancelled",
-            error = null,
-        )
+    /** Paused keeps the numbers it had; cancelled says so. */
+    private fun stopState(): DownloadUiState = emitState {
+        if (paused.get()) {
+            it.copy(
+                phase = DownloadPhase.PAUSED,
+                speedBps = 0L,
+                etaSeconds = 0L,
+                message = if (it.totalBytes > 0L) {
+                    "Paused at ${(it.progress * 100f).toInt()}% - tap resume to continue"
+                } else {
+                    "Paused - tap resume to keep looking for peers"
+                },
+                error = null,
+            )
+        } else {
+            it.copy(phase = DownloadPhase.CANCELLED, message = "Download cancelled", error = null)
+        }
     }
 
     private fun finish(dir: File, existing: Set<String>): DownloadUiState {
@@ -348,8 +386,7 @@ class MagnetDownloader(
             it.copy(phase = DownloadPhase.FINALIZING, message = "Finishing the torrent...")
         }
 
-        // Stop libtorrent from touching the payload files while they are being published:
-        // pause first, then give its disk thread a moment to flush.
+        // Stop libtorrent from touching the payload files while they are being published.
         runCatching { torrent?.pause() }
         sleep(300L)
 
@@ -371,9 +408,9 @@ class MagnetDownloader(
                     doneBytes = totalBytes,
                     speedBps = 0L,
                     etaSeconds = 0L,
-                    sha256 = hash,
                     savedUri = published?.uri,
                     savedPath = path,
+                    sha256 = hash,
                     message = "Saved to $path",
                 )
             }
@@ -400,7 +437,7 @@ class MagnetDownloader(
         }
     }
 
-    /** First line of the exception plus its two nearest causes: the useful sentence is never outermost. */
+    /** First line of the exception plus its two nearest causes. */
     private fun describeFailure(t: Throwable): String {
         val parts = generateSequence(t) { cause -> cause.cause }
             .map { cause -> firstLine(cause.message)?.takeIf { it.isNotBlank() } ?: cause.javaClass.simpleName }
@@ -419,6 +456,7 @@ class MagnetDownloader(
     private companion object {
         const val POLL_INTERVAL_MS = 500L
         const val HANDLE_TIMEOUT_MS = 15_000L
+        const val REANNOUNCE_INTERVAL_MS = 15_000L
         const val METADATA_TIMEOUT_MS = 180_000L
         const val STALL_TIMEOUT_MS = 480_000L
     }

@@ -28,7 +28,6 @@ import com.fasterdownloads.core.DownloadKind
 import com.fasterdownloads.core.DownloadPhase
 import com.fasterdownloads.core.DownloadRequest
 import com.fasterdownloads.core.DownloadUiState
-import com.fasterdownloads.core.LinkProgress
 import com.fasterdownloads.core.formatBytes
 import com.fasterdownloads.core.formatDuration
 import com.fasterdownloads.core.formatSpeed
@@ -44,14 +43,11 @@ fun FasterDownloadsApp(
     onEnsurePermissions: () -> Unit,
 ) {
     val context = LocalContext.current
-    val state by DownloadController.state.collectAsState()
+    val downloads by DownloadController.downloads.collectAsState()
     val incoming by DownloadController.incoming.collectAsState()
 
     var url by rememberSaveable { mutableStateOf("") }
     var fileName by rememberSaveable { mutableStateOf("") }
-    var useMobileData by rememberSaveable { mutableStateOf(true) }
-    var wifiWeight by rememberSaveable { mutableStateOf(70f) }
-    var connections by rememberSaveable { mutableStateOf(4f) }
 
     // A magnet link opened from a browser or shared to the app lands here.
     LaunchedEffect(incoming) {
@@ -65,7 +61,8 @@ fun FasterDownloadsApp(
     val trimmedUrl = url.trim()
     val isMagnet = trimmedUrl.startsWith("magnet:", ignoreCase = true)
     val isHttp = trimmedUrl.startsWith("http://") || trimmedUrl.startsWith("https://")
-    val canStart = (isMagnet || isHttp) && !state.running
+    val canAdd = isMagnet || isHttp
+    val finishedCount = downloads.count { it.terminal }
 
     val fg = MaterialTheme.colorScheme.onBackground
 
@@ -80,7 +77,7 @@ fun FasterDownloadsApp(
         ) {
             Header(night = night, onToggleTheme = onToggleTheme)
 
-            Section(title = "Source") {
+            Section(title = "New download") {
                 OutlinedTextField(
                     value = url,
                     onValueChange = { url = it },
@@ -113,110 +110,18 @@ fun FasterDownloadsApp(
                 ) {
                     Text("Use a 100 MB test file", style = MaterialTheme.typography.labelLarge)
                 }
-            }
 
-            if (isMagnet) {
-                Section(title = "Torrent") {
-                    Text(
-                        "Magnet links run on libtorrent - the native BitTorrent engine behind " +
-                            "LibreTorrent and TorrDroid. UDP and HTTP trackers, DHT, peer " +
-                            "exchange, local discovery and \u00b5TP all work, so metadata comes " +
-                            "from whichever path the network allows. The file name and size " +
-                            "appear as soon as a peer answers.",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = fg.copy(alpha = 0.62f),
-                    )
-                    Text(
-                        "Bonding Wi-Fi + mobile data applies to HTTP downloads only - a swarm's " +
-                            "peer sockets all use the default network.",
-                        style = MaterialTheme.typography.labelSmall,
-                        color = fg.copy(alpha = 0.5f),
-                    )
-                }
-            } else {
-                Section(title = "Links") {
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.spacedBy(12.dp),
-                    ) {
-                        Column(modifier = Modifier.weight(1f)) {
-                            Text("Bond Wi-Fi + mobile data", style = MaterialTheme.typography.bodyLarge)
-                            Text(
-                                "Half the connections leave over cellular while Wi-Fi keeps the rest.",
-                                style = MaterialTheme.typography.bodySmall,
-                                color = fg.copy(alpha = 0.6f),
-                            )
-                        }
-                        Switch(
-                            checked = useMobileData,
-                            onCheckedChange = { useMobileData = it },
-                            colors = SwitchDefaults.colors(
-                                checkedThumbColor = MaterialTheme.colorScheme.background,
-                                checkedTrackColor = fg,
-                                checkedBorderColor = fg,
-                                uncheckedThumbColor = fg.copy(alpha = 0.45f),
-                                uncheckedTrackColor = Color.Transparent,
-                                uncheckedBorderColor = fg.copy(alpha = 0.55f),
-                            ),
-                        )
-                    }
-
-                    if (useMobileData) {
-                        Row(
-                            modifier = Modifier.fillMaxWidth(),
-                            verticalAlignment = Alignment.CenterVertically,
-                        ) {
-                            Text("Wi-Fi share", style = MaterialTheme.typography.bodyMedium)
-                            Spacer(modifier = Modifier.weight(1f))
-                            Text("${wifiWeight.toInt()}%", style = MaterialTheme.typography.titleMedium)
-                        }
-                        Slider(
-                            value = wifiWeight,
-                            onValueChange = { wifiWeight = it },
-                            valueRange = 50f..90f,
-                            steps = 7,
-                            colors = sliderColors(),
-                        )
-                    }
-
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        verticalAlignment = Alignment.CenterVertically,
-                    ) {
-                        Text("Connections per network", style = MaterialTheme.typography.bodyMedium)
-                        Spacer(modifier = Modifier.weight(1f))
-                        Text("${connections.toInt()}", style = MaterialTheme.typography.titleMedium)
-                    }
-                    Slider(
-                        value = connections,
-                        onValueChange = { connections = it },
-                        valueRange = 1f..8f,
-                        steps = 6,
-                        colors = sliderColors(),
-                    )
-                }
-            }
-
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.spacedBy(12.dp),
-            ) {
                 Button(
                     onClick = {
                         onEnsurePermissions()
                         DownloadService.start(
                             context,
-                            DownloadRequest(
-                                url = trimmedUrl,
-                                fileName = fileName.trim(),
-                                wifiWeight = wifiWeight.toInt(),
-                                connectionsPerNetwork = connections.toInt(),
-                                useMobileData = useMobileData,
-                            ),
+                            DownloadRequest(url = trimmedUrl, fileName = fileName.trim()),
                         )
+                        url = ""
+                        fileName = ""
                     },
-                    enabled = canStart,
+                    enabled = canAdd,
                     shape = RoundedCornerShape(12.dp),
                     elevation = null,
                     colors = ButtonDefaults.buttonColors(
@@ -226,37 +131,61 @@ fun FasterDownloadsApp(
                         disabledContentColor = MaterialTheme.colorScheme.background.copy(alpha = 0.75f),
                     ),
                     modifier = Modifier
-                        .weight(2f)
+                        .fillMaxWidth()
                         .height(54.dp),
                 ) {
+                    Text("Add download", style = MaterialTheme.typography.labelLarge)
+                }
+
+                Text(
+                    if (isMagnet) {
+                        "Magnets run on libtorrent; the engine is shared, so a second magnet " +
+                            "finds peers in seconds instead of bootstrapping DHT again."
+                    } else {
+                        "HTTP downloads always use Wi-Fi and mobile data together: 50/50 split, " +
+                            "8 parallel range requests per network."
+                    },
+                    style = MaterialTheme.typography.labelSmall,
+                    color = fg.copy(alpha = 0.5f),
+                )
+            }
+
+            if (downloads.isEmpty()) {
+                Text(
+                    text = "Nothing downloading yet. Paste a link above, or open a magnet from " +
+                        "a browser - the app takes over from there.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = fg.copy(alpha = 0.55f),
+                )
+            } else {
+                Row(verticalAlignment = Alignment.CenterVertically) {
                     Text(
-                        text = if (state.phase == DownloadPhase.COMPLETED) "Download again" else "Start download",
-                        style = MaterialTheme.typography.labelLarge,
+                        text = "DOWNLOADS",
+                        style = MaterialTheme.typography.labelMedium,
+                        color = fg.copy(alpha = 0.75f),
+                        modifier = Modifier.weight(1f),
+                    )
+                    if (finishedCount > 0) {
+                        TextButton(
+                            onClick = { DownloadController.clearFinished() },
+                            colors = ButtonDefaults.textButtonColors(contentColor = fg.copy(alpha = 0.7f)),
+                            contentPadding = PaddingValues(horizontal = 0.dp, vertical = 4.dp),
+                        ) {
+                            Text("Clear finished", style = MaterialTheme.typography.labelSmall)
+                        }
+                    }
+                }
+
+                downloads.forEach { state ->
+                    DownloadCard(
+                        state = state,
+                        onPause = { DownloadService.pause(context, state.id) },
+                        onResume = { DownloadService.resume(context, state.id) },
+                        onCancel = { DownloadService.cancel(context, state.id) },
+                        onRemove = { DownloadController.remove(state.id) },
+                        onOpenFile = onOpenFile,
                     )
                 }
-                OutlinedButton(
-                    onClick = { DownloadService.cancel(context) },
-                    enabled = state.running,
-                    shape = RoundedCornerShape(12.dp),
-                    border = BorderStroke(1.dp, if (state.running) fg else fg.copy(alpha = 0.3f)),
-                    colors = ButtonDefaults.outlinedButtonColors(
-                        contentColor = fg,
-                        disabledContentColor = fg.copy(alpha = 0.35f),
-                    ),
-                    modifier = Modifier
-                        .weight(1f)
-                        .height(54.dp),
-                ) {
-                    Text("Cancel", style = MaterialTheme.typography.labelLarge)
-                }
-            }
-
-            if (state.phase != DownloadPhase.IDLE) {
-                ProgressSection(state)
-            }
-
-            if (state.phase == DownloadPhase.COMPLETED) {
-                SavedSection(state, onOpenFile)
             }
 
             Spacer(modifier = Modifier.height(12.dp))
@@ -286,7 +215,8 @@ private fun Header(night: Boolean, onToggleTheme: () -> Unit) {
         )
         Text(
             text = "One file, two radios. HTTP chunks ride Wi-Fi and mobile data at the same " +
-                "time; magnet links come from the BitTorrent swarm.",
+                "time; magnet links come from the BitTorrent swarm. Several downloads run " +
+                "side by side.",
             style = MaterialTheme.typography.bodyMedium,
             color = fg.copy(alpha = 0.62f),
         )
@@ -361,11 +291,50 @@ private fun Section(title: String, content: @Composable ColumnScope.() -> Unit) 
     }
 }
 
+/**
+ * One download: name, progress, live numbers, and the buttons that act on it.
+ * Every card is independent - pause one, cancel another, add a third.
+ */
 @Composable
-private fun ProgressSection(state: DownloadUiState) {
+private fun DownloadCard(
+    state: DownloadUiState,
+    onPause: () -> Unit,
+    onResume: () -> Unit,
+    onCancel: () -> Unit,
+    onRemove: () -> Unit,
+    onOpenFile: (String) -> Unit,
+) {
     val fg = MaterialTheme.colorScheme.onBackground
-    Section(title = "Progress") {
-        val determinate = state.totalBytes > 0L
+    val determinate = state.totalBytes > 0L && state.phase != DownloadPhase.QUEUED
+
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(16.dp))
+            .border(BorderStroke(1.dp, fg.copy(alpha = 0.85f)), RoundedCornerShape(16.dp))
+            .padding(16.dp),
+        verticalArrangement = Arrangement.spacedBy(10.dp),
+    ) {
+        Row(verticalAlignment = Alignment.Top) {
+            Text(
+                text = state.title,
+                style = MaterialTheme.typography.titleMedium,
+                maxLines = 2,
+                overflow = TextOverflow.Ellipsis,
+                modifier = Modifier.weight(1f),
+            )
+            Text(
+                text = phaseLabel(state),
+                style = MaterialTheme.typography.labelSmall,
+                color = if (state.phase == DownloadPhase.FAILED) {
+                    MaterialTheme.colorScheme.error
+                } else {
+                    fg.copy(alpha = 0.55f)
+                },
+                modifier = Modifier.padding(start = 12.dp, top = 3.dp),
+            )
+        }
+
         if (determinate) {
             LinearProgressIndicator(
                 progress = { state.progress },
@@ -376,7 +345,20 @@ private fun ProgressSection(state: DownloadUiState) {
                 color = fg,
                 trackColor = fg.copy(alpha = 0.16f),
             )
-        } else {
+            Row(verticalAlignment = Alignment.Bottom) {
+                Text(
+                    text = "${(state.progress * 100f).toInt()}%",
+                    style = MaterialTheme.typography.headlineSmall,
+                    modifier = Modifier.weight(1f),
+                )
+                Text(
+                    text = "${formatBytes(state.doneBytes)} / ${formatBytes(state.totalBytes)}",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = fg.copy(alpha = 0.6f),
+                    modifier = Modifier.padding(bottom = 6.dp),
+                )
+            }
+        } else if (state.phase == DownloadPhase.DOWNLOADING || state.phase == DownloadPhase.PREPARING) {
             LinearProgressIndicator(
                 modifier = Modifier
                     .fillMaxWidth()
@@ -387,53 +369,43 @@ private fun ProgressSection(state: DownloadUiState) {
             )
         }
 
-        Row(
-            modifier = Modifier.fillMaxWidth(),
-            verticalAlignment = Alignment.Bottom,
+        if (state.phase == DownloadPhase.DOWNLOADING ||
+            state.phase == DownloadPhase.PREPARING ||
+            state.phase == DownloadPhase.FINALIZING ||
+            state.phase == DownloadPhase.PAUSED
         ) {
-            Text(
-                text = if (determinate) "${(state.progress * 100f).toInt()}%" else "--",
-                style = MaterialTheme.typography.displaySmall,
-                modifier = Modifier.weight(1f),
-            )
-            Text(
-                text = if (determinate) {
-                    "${formatBytes(state.doneBytes)} / ${formatBytes(state.totalBytes)}"
+            Row(modifier = Modifier.fillMaxWidth()) {
+                Stat("Speed", formatSpeed(state.speedBps), Modifier.weight(1f))
+                Stat("ETA", formatDuration(state.etaSeconds), Modifier.weight(1f))
+                if (state.kind == DownloadKind.TORRENT) {
+                    Stat("Peers", state.peers.toString(), Modifier.weight(1f))
                 } else {
-                    formatBytes(state.doneBytes)
-                },
-                style = MaterialTheme.typography.bodySmall,
-                color = fg.copy(alpha = 0.6f),
-                modifier = Modifier.padding(bottom = 8.dp),
-            )
-        }
-
-        Row(modifier = Modifier.fillMaxWidth()) {
-            Stat("Speed", formatSpeed(state.speedBps), Modifier.weight(1f))
-            Stat("ETA", formatDuration(state.etaSeconds), Modifier.weight(1f))
-            if (state.kind == DownloadKind.TORRENT) {
-                Stat("Peers", state.peers.toString(), Modifier.weight(1f))
-            } else {
-                Stat("Mode", if (state.dualActive) "Bonded" else "Single", Modifier.weight(1f))
+                    Stat("Mode", if (state.dualActive) "Bonded" else "Single", Modifier.weight(1f))
+                }
             }
         }
 
-        if (state.kind == DownloadKind.TORRENT) {
+        // Status line for the two radios: this is the bonding working, not a setting.
+        if (state.kind == DownloadKind.HTTP && state.links.any { it.active || it.bytes > 0L }) {
             Text(
-                text = "BitTorrent engine - libtorrent (trackers + DHT + PeX)",
+                text = state.links.joinToString("  \u00b7  ") { link ->
+                    val speed = if (link.active) formatSpeed(link.speedBps) else "idle"
+                    "${link.label} $speed"
+                },
                 style = MaterialTheme.typography.labelSmall,
-                color = fg.copy(alpha = 0.55f),
+                color = fg.copy(alpha = 0.5f),
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
             )
+        }
+
+        if (state.kind == DownloadKind.TORRENT) {
             state.diagnostics?.takeIf { it.isNotBlank() }?.let { detail ->
                 Text(
                     text = detail,
                     style = MaterialTheme.typography.labelSmall,
                     color = fg.copy(alpha = 0.45f),
                 )
-            }
-        } else {
-            Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
-                state.links.forEach { link -> LinkRow(link) }
             }
         }
 
@@ -450,6 +422,76 @@ private fun ProgressSection(state: DownloadUiState) {
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.error,
             )
+        }
+
+        if (state.phase == DownloadPhase.COMPLETED) {
+            SavedBlock(state = state, onOpenFile = onOpenFile)
+        }
+
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.spacedBy(10.dp),
+        ) {
+            if (state.pausable) {
+                ActionButton(text = "Pause", onClick = onPause, modifier = Modifier.weight(1f))
+                ActionButton(text = "Cancel", onClick = onCancel, modifier = Modifier.weight(1f))
+            } else if (state.phase == DownloadPhase.QUEUED) {
+                ActionButton(text = "Remove", onClick = onRemove, modifier = Modifier.weight(1f))
+            } else if (state.resumable) {
+                ActionButton(
+                    text = if (state.phase == DownloadPhase.PAUSED) "Resume" else "Retry",
+                    onClick = onResume,
+                    modifier = Modifier.weight(1f),
+                    filled = true,
+                )
+                ActionButton(text = "Remove", onClick = onRemove, modifier = Modifier.weight(1f))
+            } else if (state.phase == DownloadPhase.COMPLETED) {
+                ActionButton(text = "Remove", onClick = onRemove, modifier = Modifier.weight(1f))
+            }
+        }
+    }
+}
+
+private fun phaseLabel(state: DownloadUiState): String = when (state.phase) {
+    DownloadPhase.QUEUED -> "QUEUED"
+    DownloadPhase.PREPARING -> "PREPARING"
+    DownloadPhase.DOWNLOADING -> if (state.totalBytes > 0L) "DOWNLOADING" else "FINDING PEERS"
+    DownloadPhase.PAUSED -> "PAUSED"
+    DownloadPhase.FINALIZING -> "FINISHING"
+    DownloadPhase.COMPLETED -> "DONE"
+    DownloadPhase.FAILED -> "FAILED"
+    DownloadPhase.CANCELLED -> "CANCELLED"
+    DownloadPhase.IDLE -> ""
+}
+
+@Composable
+private fun ActionButton(
+    text: String,
+    onClick: () -> Unit,
+    modifier: Modifier = Modifier,
+    filled: Boolean = false,
+) {
+    val fg = MaterialTheme.colorScheme.onBackground
+    val bg = MaterialTheme.colorScheme.background
+    if (filled) {
+        Button(
+            onClick = onClick,
+            shape = RoundedCornerShape(12.dp),
+            elevation = null,
+            colors = ButtonDefaults.buttonColors(containerColor = fg, contentColor = bg),
+            modifier = modifier.height(44.dp),
+        ) {
+            Text(text, style = MaterialTheme.typography.labelLarge)
+        }
+    } else {
+        OutlinedButton(
+            onClick = onClick,
+            shape = RoundedCornerShape(12.dp),
+            border = BorderStroke(1.dp, fg.copy(alpha = 0.6f)),
+            colors = ButtonDefaults.outlinedButtonColors(contentColor = fg),
+            modifier = modifier.height(44.dp),
+        ) {
+            Text(text, style = MaterialTheme.typography.labelLarge)
         }
     }
 }
@@ -468,68 +510,30 @@ private fun Stat(label: String, value: String, modifier: Modifier = Modifier) {
 }
 
 @Composable
-private fun LinkRow(link: LinkProgress) {
+private fun SavedBlock(state: DownloadUiState, onOpenFile: (String) -> Unit) {
     val fg = MaterialTheme.colorScheme.onBackground
-    Row(
-        modifier = Modifier.fillMaxWidth(),
-        verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(10.dp),
-    ) {
-        Box(
-            modifier = Modifier
-                .size(8.dp)
-                .clip(CircleShape)
-                .background(if (link.active) fg else fg.copy(alpha = 0.25f)),
-        )
-        Column(modifier = Modifier.weight(1f)) {
-            Text(text = link.label, style = MaterialTheme.typography.bodyMedium)
-            Text(
-                text = link.error ?: "${formatBytes(link.bytes)} transferred",
-                style = MaterialTheme.typography.labelSmall,
-                color = if (link.error == null) fg.copy(alpha = 0.55f) else MaterialTheme.colorScheme.error,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis,
-            )
-        }
+    Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
         Text(
-            text = formatSpeed(link.speedBps),
-            style = MaterialTheme.typography.bodyMedium,
-            fontFamily = FontFamily.Monospace,
+            text = state.savedPath ?: state.message,
+            style = MaterialTheme.typography.bodySmall,
+            color = fg.copy(alpha = 0.7f),
         )
-    }
-}
-
-@Composable
-private fun SavedSection(state: DownloadUiState, onOpenFile: (String) -> Unit) {
-    val fg = MaterialTheme.colorScheme.onBackground
-    Section(title = "Saved") {
-        Text(text = state.savedPath ?: state.message, style = MaterialTheme.typography.bodyMedium)
-
         state.sha256?.let { hash ->
             Text(
-                text = "SHA-256",
-                style = MaterialTheme.typography.labelSmall,
-                color = fg.copy(alpha = 0.55f),
-            )
-            Text(
                 text = hash,
-                style = MaterialTheme.typography.bodySmall,
+                style = MaterialTheme.typography.labelSmall,
                 fontFamily = FontFamily.Monospace,
-                maxLines = 3,
+                maxLines = 2,
                 overflow = TextOverflow.Ellipsis,
+                color = fg.copy(alpha = 0.45f),
             )
         }
-
         val uri = state.savedUri
         if (uri != null && uri.startsWith("content://")) {
-            Button(
+            TextButton(
                 onClick = { onOpenFile(uri) },
-                shape = RoundedCornerShape(12.dp),
-                elevation = null,
-                colors = ButtonDefaults.buttonColors(
-                    containerColor = fg,
-                    contentColor = MaterialTheme.colorScheme.background,
-                ),
+                colors = ButtonDefaults.textButtonColors(contentColor = fg),
+                contentPadding = PaddingValues(horizontal = 0.dp, vertical = 4.dp),
             ) {
                 Text("Open file", style = MaterialTheme.typography.labelLarge)
             }
@@ -550,13 +554,4 @@ private fun fieldColors() = OutlinedTextFieldDefaults.colors(
     unfocusedLabelColor = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.55f),
     focusedPlaceholderColor = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.4f),
     unfocusedPlaceholderColor = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.4f),
-)
-
-@Composable
-private fun sliderColors() = SliderDefaults.colors(
-    thumbColor = MaterialTheme.colorScheme.onBackground,
-    activeTrackColor = MaterialTheme.colorScheme.onBackground,
-    inactiveTrackColor = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.2f),
-    activeTickColor = Color.Transparent,
-    inactiveTickColor = Color.Transparent,
 )

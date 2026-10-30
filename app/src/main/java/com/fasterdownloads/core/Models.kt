@@ -12,22 +12,36 @@ enum class DownloadKind {
 /** Phases of a download. */
 enum class DownloadPhase {
     IDLE,
+
+    /** Waiting for a free slot: the app runs a few downloads at once, not all of them. */
+    QUEUED,
     PREPARING,
     DOWNLOADING,
+
+    /** Stopped by the user. The partial file and its journal stay on disk. */
+    PAUSED,
     FINALIZING,
     COMPLETED,
     FAILED,
     CANCELLED,
 }
 
-/** Everything the user (or the service) can configure before a download starts. */
+/**
+ * Everything the user (or the service) can configure before a download starts.
+ *
+ * There is deliberately nothing here to turn bonding down: two radios are the point of the
+ * app, so HTTP downloads always split 50/50 across Wi-Fi and mobile data with the maximum
+ * number of parallel range requests on each.
+ */
 data class DownloadRequest(
+    /** Job id, filled in by [DownloadController.add]. */
+    val id: String = "",
     val url: String,
     val fileName: String = "",
     /** Share of parallel workers assigned to Wi-Fi when both links are bonded. */
-    val wifiWeight: Int = 70,
+    val wifiWeight: Int = 50,
     /** Base number of parallel range requests per network. */
-    val connectionsPerNetwork: Int = 4,
+    val connectionsPerNetwork: Int = 8,
     val useMobileData: Boolean = true,
     val verifyHash: Boolean = true,
 ) {
@@ -45,8 +59,10 @@ data class LinkProgress(
     val error: String? = null,
 )
 
-/** Immutable snapshot of the current download, rendered by Compose. */
+/** Immutable snapshot of one download, rendered by Compose. */
 data class DownloadUiState(
+    /** Stable job id: several downloads run at once, so state is keyed by this. */
+    val id: String = "",
     val phase: DownloadPhase = DownloadPhase.IDLE,
     val kind: DownloadKind = DownloadKind.HTTP,
     val url: String = "",
@@ -77,8 +93,32 @@ data class DownloadUiState(
             0f
         }
 
+    /** Occupies an engine right now (or is waiting for one). */
     val running: Boolean
+        get() = phase == DownloadPhase.QUEUED ||
+            phase == DownloadPhase.PREPARING ||
+            phase == DownloadPhase.DOWNLOADING ||
+            phase == DownloadPhase.FINALIZING
+
+    /** Finished, one way or another: no engine needed any more. */
+    val terminal: Boolean
+        get() = phase == DownloadPhase.COMPLETED ||
+            phase == DownloadPhase.FAILED ||
+            phase == DownloadPhase.CANCELLED
+
+    /** Can be stopped by the user. */
+    val pausable: Boolean
         get() = phase == DownloadPhase.PREPARING ||
             phase == DownloadPhase.DOWNLOADING ||
             phase == DownloadPhase.FINALIZING
+
+    /** Can be started (again) by the user. */
+    val resumable: Boolean
+        get() = phase == DownloadPhase.PAUSED ||
+            phase == DownloadPhase.FAILED ||
+            phase == DownloadPhase.CANCELLED
+
+    /** A human name for the card: file name, then the URL. */
+    val title: String
+        get() = fileName.ifBlank { url }
 }

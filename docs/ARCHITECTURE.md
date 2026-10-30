@@ -165,12 +165,13 @@ trackers), which is what most public trackers speak.
 | Step | Call |
 | --- | --- |
 | Rebuild the link | `MagnetLink.parse(raw).toMagnetUri()` - decoded, de-duplicated, re-encoded |
-| Start the engine | `SessionManager().start()` - DHT bootstrap, alert loop, tracker/DHT/LSD/PeX managers, µTP |
+| Start the engine | `TorrentEngine.acquire()` - one shared, pre-warmed `SessionManager` for the whole app |
 | Add the torrent | `session.download(magnetUri, Storage.torrentDir(ctx), TorrentFlags.AUTO_MANAGED)` |
 | Find the handle | `session.find(Sha1Hash.parseHex(infoHash))` (adds are async, so this is polled) |
 | Progress | `TorrentHandle.status()` every 500 ms: `hasMetadata()`, `totalWanted()`, `totalWantedDone()`, `numPeers()`, `numSeeds()`, `downloadPayloadRate()`, `isFinished()` |
 | Diagnostics | `session.dhtNodes()` + peer/seed/tracker counts, rendered under the progress card |
-| Cancel | `handle.pause()` from the caller, `session.stop()` from the engine thread in `finally` |
+| Cancel / pause | `handle.pause()` from the caller; `session.remove(handle)` keeps the data on disk |
+| Announce | `handle.forceReannounce()` on add (and every 15 s until metadata lands) |
 
 `downloadPayloadRate()` is already smoothed inside libtorrent, so the speed shown does not
 flicker between ticks (the HTTP engine's `SpeedMeter` is unnecessary here). `hasMetadata()`
@@ -191,13 +192,32 @@ Single-file payloads are published through the same MediaStore path as HTTP down
 multi-file payloads stay in the torrent folder. The native engine takes the APK from 9.1 MB to
 18.9 MB, most of it `libtorrent4j.so` for two ABIs.
 
-## 8. Foreground service
+## 8. Several downloads, pause, and the service
 
-`DownloadService` (type `dataSync`) is started with `startForegroundService`, immediately
-calls `startForeground`, and holds a partial wake lock for at most an hour. It owns the
-engine, forwards snapshots to `DownloadController`, throttles notification updates to whole
-percent changes, and exposes a `Cancel` action that disconnects in-flight sockets so a
-blocked read fails instantly instead of waiting for its timeout.
+`DownloadController` is the list: `StateFlow<List<DownloadUiState>>` keyed by job id, plus the
+`DownloadRequest` behind each job (needed to resume). The UI renders it, the service writes it.
+Because the list lives in the controller and not in the service, a paused or finished job
+survives the service stopping.
+
+`DownloadService` holds one `DownloadEngine` per running job (see `Runtime`):
+
+| Action | Behaviour |
+| --- | --- |
+| `START` / `RESUME` | marks the job `QUEUED`, then `pump()` launches engines while slots are free |
+| `PAUSE` | `engine.pause()`; a queued job is simply taken out of the queue |
+| `CANCEL` | `engine.cancel()`; the job ends `CANCELLED` and can be resumed |
+| `CANCEL_ALL` | notification action: cancels every engine |
+
+`MAX_CONCURRENT = 3` engines run at once; the rest wait as `QUEUED`. When an engine returns,
+`onEngineFinished()` refills the slots and stops the service (and the wake lock) once nothing is
+running. The notification aggregates the batch - "3 downloads running", combined speed,
+combined progress - and beats a single job's name and percentage.
+
+**Pause is not cancel.** Both set the same stop flag and drop in-flight sockets, but the engine
+returns `PAUSED` and the partial data is kept: the HTTP engine writes its chunk journal in
+`cleanupAfterFailure(keepPartial = true)`, and the torrent engine removes the torrent from the
+session *without* deleting its files. Resuming builds a fresh engine from the stored request,
+which picks the data up again (HTTP from the journal, BitTorrent by re-checking files).
 
 ## 9. Failure modes
 
@@ -212,4 +232,6 @@ blocked read fails instantly instead of waiting for its timeout.
 | User cancels | Sockets dropped, journal written, `CANCELLED` state, partial kept for resume |
 | Process killed | Journal + `.part` survive; a new run resumes |
 | Magnet with no peers | Fails after 180 s, reporting peers / seeds / DHT nodes |
+| Four or more downloads added | The extra ones wait as `QUEUED` and start as slots free |
+| User pauses | Engines drop their sockets, partial data + journal kept, state `PAUSED` |
 | Magnet cancelled | `session.stop()`, partial data stays in the torrent folder |
