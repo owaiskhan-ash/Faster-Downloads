@@ -188,7 +188,8 @@ Three collisions with reality are handled explicitly:
   `.so` is present for every ABI in `abiFilters`, because that failure only shows up on device.
 
 Single-file payloads are published through the same MediaStore path as HTTP downloads;
-multi-file payloads stay in the torrent folder. The APK grows by roughly 12 MB.
+multi-file payloads stay in the torrent folder. The native engine takes the APK from 9.1 MB to
+18.9 MB, most of it `libtorrent4j.so` for two ABIs.
 
 ## 8. Foreground service
 

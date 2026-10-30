@@ -114,7 +114,8 @@ LibreTorrent, FrostWire and TorrDroid use.
   together in the app's torrent folder
 - torrents always use the device's default network — bonding two radios only applies to
   HTTP range downloads, because thousands of peer sockets cannot be split meaningfully
-- the native engine adds roughly 12 MB to the APK (two ABIs: `arm64-v8a`, `armeabi-v7a`)
+- the native engine is most of the download size: the APK is **~18 MB** instead of ~9 MB
+  (two ABIs: `arm64-v8a`, `armeabi-v7a`)
 
 Download only content you have the right to.
 

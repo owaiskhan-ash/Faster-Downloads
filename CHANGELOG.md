@@ -33,8 +33,9 @@ This project follows [Semantic Versioning](https://semver.org/).
   libtorrent, with round-trip tests.
 
 ### Notes
-- The APK grows by roughly 12 MB (two ABIs: `arm64-v8a`, `armeabi-v7a`); the native library is
-  extracted on install (`useLegacyPackaging`), the arrangement the Android libtorrent clients use.
+- The APK grows from 9.1 MB to 18.9 MB (two ABIs: `arm64-v8a`, `armeabi-v7a`); the native
+  library is extracted on install (`useLegacyPackaging`), the arrangement the Android
+  libtorrent clients use.
 - Kotlin/AGP/Gradle, Compose and the HTTP engine are unchanged.
 
 ## [0.5.1] - 2026-10-30
