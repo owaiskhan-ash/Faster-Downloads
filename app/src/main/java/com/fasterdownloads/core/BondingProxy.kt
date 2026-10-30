@@ -137,9 +137,9 @@ class BondingProxy(private val context: Context) {
     }
 
     fun stop() {
-        val socket: ServerSocket?
-        val source: NetworkLinks?
-        val executor: ExecutorService?
+        var socket: ServerSocket? = null
+        var source: NetworkLinks? = null
+        var executor: ExecutorService? = null
         synchronized(lock) {
             socket = server
             source = links
@@ -350,9 +350,9 @@ class BondingProxy(private val context: Context) {
 }
 
 /** Where a SOCKS5 client wants us to connect. */
-internal sealed class SocksTarget {
-    data class Ip(val address: InetAddress, val port: Int) : SocksTarget()
-    data class Host(val host: String, val port: Int) : SocksTarget()
+internal sealed class SocksTarget(val port: Int) {
+    data class Ip(val address: InetAddress, port: Int) : SocksTarget(port)
+    data class Host(val host: String, port: Int) : SocksTarget(port)
 }
 
 /** The 20 lines of SOCKS5 (RFC 1928) this proxy needs, as pure stream functions. */
