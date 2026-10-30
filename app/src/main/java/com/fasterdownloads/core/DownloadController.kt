@@ -20,4 +20,19 @@ object DownloadController {
     fun reset() {
         mutable.value = DownloadUiState()
     }
+
+    // ---- URLs handed to us by other apps (magnet links, share sheet) ----
+
+    private val incomingUrl = MutableStateFlow<String?>(null)
+
+    /** A magnet link that arrived via an ACTION_VIEW intent and was not consumed yet. */
+    val incoming: kotlinx.coroutines.flow.StateFlow<String?> = incomingUrl.asStateFlow()
+
+    fun pushIncoming(url: String) {
+        incomingUrl.value = url
+    }
+
+    fun clearIncoming() {
+        incomingUrl.value = null
+    }
 }

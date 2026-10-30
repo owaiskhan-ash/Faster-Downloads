@@ -19,6 +19,8 @@ import com.fasterdownloads.core.DownloadController
 import com.fasterdownloads.core.DownloadPhase
 import com.fasterdownloads.core.DownloadRequest
 import com.fasterdownloads.core.DownloadUiState
+import com.fasterdownloads.core.DownloadEngine
+import com.fasterdownloads.core.MagnetDownloader
 import com.fasterdownloads.core.MultiPathDownloader
 import com.fasterdownloads.core.formatBytes
 import com.fasterdownloads.core.formatSpeed
@@ -39,7 +41,7 @@ class DownloadService : Service() {
 
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     private var job: Job? = null
-    private var downloader: MultiPathDownloader? = null
+    private var downloader: DownloadEngine? = null
     private var wakeLock: PowerManager.WakeLock? = null
     private var lastNotifiedPercent = -1
 
@@ -112,9 +114,14 @@ class DownloadService : Service() {
             ),
         )
 
-        val engine = MultiPathDownloader(applicationContext, request) { state ->
+        val onState: (DownloadUiState) -> Unit = { state ->
             DownloadController.publish(state)
             updateNotification(state)
+        }
+        val engine: DownloadEngine = if (request.isMagnet) {
+            MagnetDownloader(applicationContext, request, onState)
+        } else {
+            MultiPathDownloader(applicationContext, request, onState)
         }
         downloader = engine
 

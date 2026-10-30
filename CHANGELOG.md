@@ -3,6 +3,23 @@
 All notable changes to this project are documented here.
 This project follows [Semantic Versioning](https://semver.org/).
 
+## [0.2.0] - 2026-10-30
+
+### Added
+- **Magnet links.** The app is now a BitTorrent downloader too: paste a `magnet:` URI, or
+  open/share one from another app. Built on `bt-core` 1.10 (DHT, HTTP/UDP trackers, PEX,
+  MSE encryption), with metadata-first naming, peer count in the progress card, a two-minute
+  metadata watchdog and publishing of single-file payloads to Downloads.
+- `MainActivity` registers `magnet` (ACTION_VIEW) and `text/plain` (ACTION_SEND) intents and
+  prefills the URL field through `DownloadController.incoming`.
+- **Dark mode.** The palette inverts with the system setting: black canvas (`#0A0A0A`) with
+  neon elements, light system-bar icons and a matching window background.
+
+### Changed
+- Shared `DownloadEngine` interface so the service can run either engine; SHA-256 helper
+  moved to `Hashing`.
+- Indeterminate progress while torrent metadata is still being fetched.
+
 ## [0.1.2] - 2026-10-30
 
 ### Changed
