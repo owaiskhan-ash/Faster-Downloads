@@ -3,6 +3,26 @@
 All notable changes to this project are documented here.
 This project follows [Semantic Versioning](https://semver.org/).
 
+## [0.4.2] - 2026-10-30
+
+### Fixed
+- **`java.lang.IllegalStateException: Unable to load cache item` on every magnet.** With
+  Guice 4.x the next wall is cglib: to speed up `@Provides` methods Guice generates a
+  `FastClass` at runtime, and Android's class loader refuses the generated class
+  (`can't load this type of class file`), which Guice reports as
+  `Unable to load cache item`. Guice therefore cannot be used on Android in its normal
+  build at *any* version: 5.x dies on `Class.getAnnotatedSuperclass()`, 4.x dies on cglib.
+  The fix is the **`no_aop` build** (`com.google.inject:guice:4.2.3:no_aop`) — the same
+  artifact Maven ships and runs on: its bundled cglib is stripped at build time, so
+  `@Provides` falls back to reflection.
+  Guice is now excluded from all three bt artifacts (so the transitive copy cannot return),
+  `guice-multibindings` is declared with the same exclusion, and CI fails the build if
+  either `BindingSourceRestriction` or `com/google/inject/internal/cglib` appears in the
+  release APK dex.
+- Engine failures now report the exception **and its two nearest causes**
+  (`Unable to load cache item -> ...CodeGenerationException -> ...`), so the real reason is
+  visible in the card instead of the outermost wrapper.
+
 ## [0.4.1] - 2026-10-30
 
 ### Fixed
