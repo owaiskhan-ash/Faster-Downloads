@@ -120,10 +120,17 @@ private val ThinTypography = Typography(
     ),
 )
 
+/**
+ * @param darkTheme the resolved day/night choice: the system setting, or the manual
+ *   day/night switch in the header, which wins.
+ */
 @Composable
-fun FasterDownloadsTheme(content: @Composable () -> Unit) {
+fun FasterDownloadsTheme(
+    darkTheme: Boolean = isSystemInDarkTheme(),
+    content: @Composable () -> Unit,
+) {
     MaterialTheme(
-        colorScheme = if (isSystemInDarkTheme()) NeonDarkScheme else NeonLightScheme,
+        colorScheme = if (darkTheme) NeonDarkScheme else NeonLightScheme,
         typography = ThinTypography,
         content = content,
     )

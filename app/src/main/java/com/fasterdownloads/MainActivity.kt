@@ -3,7 +3,6 @@ package com.fasterdownloads
 import android.Manifest
 import android.content.Intent
 import android.content.pm.PackageManager
-import android.content.res.Configuration
 import android.net.Uri
 import android.os.Build
 import android.os.Bundle
@@ -12,8 +11,14 @@ import androidx.activity.SystemBarStyle
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.foundation.isSystemInDarkTheme
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.collectAsState
+import androidx.compose.runtime.getValue
 import androidx.core.content.ContextCompat
 import com.fasterdownloads.core.DownloadController
+import com.fasterdownloads.core.ThemeMode
+import com.fasterdownloads.core.ThemePreference
 import com.fasterdownloads.ui.FasterDownloadsApp
 import com.fasterdownloads.ui.theme.FasterDownloadsTheme
 
@@ -24,14 +29,38 @@ class MainActivity : ComponentActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        ThemePreference.load(this)
         enableEdgeToEdge(
-            statusBarStyle = systemBarStyle(),
-            navigationBarStyle = systemBarStyle(),
+            statusBarStyle = systemBarStyle(ThemePreference.isNight(this)),
+            navigationBarStyle = systemBarStyle(ThemePreference.isNight(this)),
         )
         handleIntent(intent)
         setContent {
-            FasterDownloadsTheme {
+            val mode by ThemePreference.mode.collectAsState()
+            val systemNight = isSystemInDarkTheme()
+            val night = when (mode) {
+                ThemeMode.DAY -> false
+                ThemeMode.NIGHT -> true
+                ThemeMode.SYSTEM -> systemNight
+            }
+
+            // The bars follow the theme, not the system, once the user has picked one.
+            LaunchedEffect(night) {
+                enableEdgeToEdge(
+                    statusBarStyle = systemBarStyle(night),
+                    navigationBarStyle = systemBarStyle(night),
+                )
+            }
+
+            FasterDownloadsTheme(darkTheme = night) {
                 FasterDownloadsApp(
+                    night = night,
+                    onToggleTheme = {
+                        ThemePreference.set(
+                            this@MainActivity,
+                            if (night) ThemeMode.DAY else ThemeMode.NIGHT,
+                        )
+                    },
                     onOpenFile = { uri -> openFile(uri) },
                     onEnsurePermissions = { ensurePermissions() },
                 )
@@ -46,9 +75,7 @@ class MainActivity : ComponentActivity() {
     }
 
     /** Dark icons on the neon canvas, light icons on the black one. */
-    private fun systemBarStyle(): SystemBarStyle {
-        val night = (resources.configuration.uiMode and Configuration.UI_MODE_NIGHT_MASK) ==
-            Configuration.UI_MODE_NIGHT_YES
+    private fun systemBarStyle(night: Boolean): SystemBarStyle {
         val transparent = android.graphics.Color.TRANSPARENT
         return if (night) {
             SystemBarStyle.dark(transparent)

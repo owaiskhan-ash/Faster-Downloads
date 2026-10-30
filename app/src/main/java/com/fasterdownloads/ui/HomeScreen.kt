@@ -3,6 +3,7 @@ package com.fasterdownloads.ui
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
@@ -16,6 +17,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.Shape
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.input.KeyboardType
@@ -36,6 +38,8 @@ private const val SAMPLE_URL = "https://speed.hetzner.de/100MB.bin"
 
 @Composable
 fun FasterDownloadsApp(
+    night: Boolean,
+    onToggleTheme: () -> Unit,
     onOpenFile: (String) -> Unit,
     onEnsurePermissions: () -> Unit,
 ) {
@@ -74,7 +78,7 @@ fun FasterDownloadsApp(
                 .padding(horizontal = 20.dp, vertical = 20.dp),
             verticalArrangement = Arrangement.spacedBy(18.dp),
         ) {
-            Header()
+            Header(night = night, onToggleTheme = onToggleTheme)
 
             Section(title = "Source") {
                 OutlinedTextField(
@@ -259,14 +263,21 @@ fun FasterDownloadsApp(
 }
 
 @Composable
-private fun Header() {
+private fun Header(night: Boolean, onToggleTheme: () -> Unit) {
     val fg = MaterialTheme.colorScheme.onBackground
     Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
-        Text(
-            text = "MULTIPATH DOWNLOADER",
-            style = MaterialTheme.typography.labelMedium,
-            color = fg.copy(alpha = 0.75f),
-        )
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Text(
+                text = "MULTIPATH DOWNLOADER",
+                style = MaterialTheme.typography.labelMedium,
+                color = fg.copy(alpha = 0.75f),
+                modifier = Modifier.weight(1f),
+            )
+            ThemeToggle(night = night, onToggleTheme = onToggleTheme)
+        }
         Text(
             text = "Faster\nDownloads",
             style = MaterialTheme.typography.displaySmall,
@@ -276,6 +287,54 @@ private fun Header() {
                 "time; magnet links come from the BitTorrent swarm.",
             style = MaterialTheme.typography.bodyMedium,
             color = fg.copy(alpha = 0.62f),
+        )
+    }
+}
+
+/**
+ * Day / night switch, top right of the header. Two explicit segments rather than a
+ * sun/moon icon toggle, so the current mode is readable at a glance and the control keeps
+ * the thin, outlined look of the rest of the app.
+ */
+@Composable
+private fun ThemeToggle(night: Boolean, onToggleTheme: () -> Unit) {
+    val fg = MaterialTheme.colorScheme.onBackground
+    val bg = MaterialTheme.colorScheme.background
+    val shape = RoundedCornerShape(percent = 50)
+    Row(
+        modifier = Modifier
+            .clip(shape)
+            .border(1.dp, fg.copy(alpha = 0.4f), shape)
+            .clickable(onClickLabel = if (night) "Switch to day mode" else "Switch to night mode") {
+                onToggleTheme()
+            }
+            .padding(3.dp),
+        horizontalArrangement = Arrangement.spacedBy(2.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        ThemeSegment(text = "DAY", selected = !night, fg = fg, bg = bg, shape = shape)
+        ThemeSegment(text = "NIGHT", selected = night, fg = fg, bg = bg, shape = shape)
+    }
+}
+
+@Composable
+private fun ThemeSegment(
+    text: String,
+    selected: Boolean,
+    fg: Color,
+    bg: Color,
+    shape: Shape,
+) {
+    Box(
+        modifier = Modifier
+            .clip(shape)
+            .background(if (selected) fg else Color.Transparent)
+            .padding(horizontal = 11.dp, vertical = 5.dp),
+    ) {
+        Text(
+            text = text,
+            style = MaterialTheme.typography.labelSmall,
+            color = if (selected) bg else fg.copy(alpha = 0.55f),
         )
     }
 }
