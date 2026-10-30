@@ -77,6 +77,11 @@ jobs:
             echo "::error::Guice 5 leaked into the APK (BindingSourceRestriction is Android-incompatible)"
             exit 1
           fi
+          # Guice 4's cglib FastClass generation cannot work on Android either.
+          if unzip -p "$APK" 'classes*.dex' | grep -aq "com/google/inject/internal/cglib"; then
+            echo "::error::Guice cglib is in the APK; it generates classes at runtime, which Android refuses (Unable to load cache item)"
+            exit 1
+          fi
           # ...and the 4.x replacement must be there, or bt's modules cannot be installed.
           if ! unzip -p "$APK" 'classes*.dex' | grep -aq "Lcom/google/inject/multibindings/Multibinder;"; then
             echo "::error::guice-multibindings is missing from the APK; bt installs its modules with Multibinder"

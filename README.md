@@ -98,9 +98,10 @@ engine takes over, powered by [atomashpolskiy/bt](https://github.com/atomashpols
   never percent-decodes `tr` parameters, so a standard link (`tr=udp%3A%2F%2F...`) would die
   with "Invalid URL" and lose every tracker. HTML-escaped (`&amp;`) and autolinked
   (`[2Ftracker](http://2Ftracker)`) links are repaired too
-- the engine's Guice dependency is pinned to 4.2.3 on purpose: Guice 5 calls
-  `Class.getAnnotatedSuperclass()`, which Android does not implement, and crashes on the
-  first magnet
+- the engine's Guice dependency is pinned to **`4.2.3:no_aop`** on purpose. Guice 5 calls
+  `Class.getAnnotatedSuperclass()` (not implemented by Android at any API level) and Guice
+  4's normal build generates cglib FastClasses that Android refuses to load; the `no_aop`
+  build has neither problem, which is why Maven itself runs on it
 - metadata is fetched from the swarm first (BEP-9), then the file name and size appear
 - DHT (BEP-5), HTTP/UDP trackers, PEX and encryption are handled by the library
 - progress, peers and ETA show in the same card; the live notification is shared with HTTP jobs

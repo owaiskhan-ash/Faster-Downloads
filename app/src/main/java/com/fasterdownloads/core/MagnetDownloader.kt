@@ -152,11 +152,10 @@ class MagnetDownloader(
             val reason = when (t) {
                 // A missing method in the DI/engine stack shows up as an Error, not an
                 // exception; say so plainly instead of pasting a JVM message.
-                is LinkageError ->
-                    "The torrent engine could not start on this device: " +
-                        (firstLine(t.message) ?: t.javaClass.simpleName)
+                is LinkageError -> "The torrent engine could not start on this device: " +
+                    describeFailure(t)
 
-                else -> firstLine(t.message) ?: t.javaClass.simpleName
+                else -> describeFailure(t)
             }
             return emitState {
                 it.copy(
@@ -286,6 +285,20 @@ class MagnetDownloader(
                 message = "Saved ${files.size} files to the app's torrent folder",
             )
         }
+    }
+
+    /**
+     * The engine sits on a deep stack (Guice → cglib → Android class loading), where the
+     * useful sentence is never the outermost one. Keep the first line of the exception and
+     * of its two nearest causes.
+     */
+    private fun describeFailure(t: Throwable): String {
+        val parts = generateSequence(t) { cause -> cause.cause }
+            .map { cause -> firstLine(cause.message)?.takeIf { it.isNotBlank() } ?: cause.javaClass.simpleName }
+            .distinct()
+            .take(3)
+            .toList()
+        return parts.joinToString(" -> ").ifBlank { t.javaClass.simpleName }
     }
 
     private fun emitState(block: (DownloadUiState) -> DownloadUiState): DownloadUiState {
