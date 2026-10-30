@@ -422,6 +422,13 @@ private fun ProgressSection(state: DownloadUiState) {
                 style = MaterialTheme.typography.labelSmall,
                 color = fg.copy(alpha = 0.55f),
             )
+            state.diagnostics?.takeIf { it.isNotBlank() }?.let { detail ->
+                Text(
+                    text = detail,
+                    style = MaterialTheme.typography.labelSmall,
+                    color = fg.copy(alpha = 0.45f),
+                )
+            }
         } else {
             Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
                 state.links.forEach { link -> LinkRow(link) }

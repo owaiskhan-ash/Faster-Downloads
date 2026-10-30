@@ -8,6 +8,7 @@ import bt.dht.DHTConfig
 import bt.dht.DHTModule
 import bt.magnet.MagnetUri
 import bt.metainfo.TorrentId
+import bt.net.InetPeerAddress
 import bt.runtime.BtClient
 import bt.runtime.Config
 import bt.torrent.TorrentSessionState
@@ -52,6 +53,10 @@ class MagnetDownloader(
     @Volatile
     private var torrentName = ""
 
+    /** What the HTTP trackers told us; shown in the card and used for failure hints. */
+    @Volatile
+    private var trackerReport: TrackerReport? = null
+
     override fun cancel() {
         cancelled.set(true)
         runCatching { client?.stop() }
@@ -77,7 +82,28 @@ class MagnetDownloader(
                     message = if (magnet.trackers.isEmpty()) {
                         "No usable trackers in the link - joining the swarm over DHT..."
                     } else {
-                        "Joining the swarm: ${magnet.trackers.size} trackers + DHT..."
+                        "Asking ${magnet.trackers.size} trackers for peers..."
+                    },
+                )
+            }
+
+            // Ask the HTTP trackers ourselves. Their answer tells us whether the swarm exists
+            // at all, and the peers they return go straight into the magnet (`x.pe`), so the
+            // metadata fetch does not depend on DHT finding nodes first.
+            val report = runCatching {
+                TrackerProbe.probe(magnet.trackers, magnet.infoHashBytes)
+            }.getOrNull()
+            trackerReport = report
+            val trackerPeers = report?.peers.orEmpty()
+
+            emitState {
+                it.copy(
+                    diagnostics = report?.summary,
+                    message = when {
+                        trackerPeers.isNotEmpty() ->
+                            "Handing ${trackerPeers.size} tracker peers to the engine (plus DHT)..."
+
+                        else -> "Joining the swarm over DHT..."
                     },
                 )
             }
@@ -94,7 +120,7 @@ class MagnetDownloader(
             val built = Bt.client()
                 .config(config)
                 .storage(FileSystemStorage(targetDir.toPath()))
-                .magnet(magnet.toBtMagnetUri())
+                .magnet(magnet.toBtMagnetUri(trackerPeers))
                 .autoLoadModules()
                 .module(dhtModule)
                 .stopWhenDownloaded()
@@ -197,7 +223,7 @@ class MagnetDownloader(
                 etaSeconds = eta,
                 peers = peers,
                 message = when {
-                    total <= 0L -> "Fetching metadata from DHT..."
+                    total <= 0L -> "Looking for peers to fetch the metadata from..."
                     peers <= 0 -> "No peers yet - waiting on trackers/DHT"
                     peers == 1 -> "1 peer connected"
                     else -> "$peers peers connected"
@@ -220,10 +246,19 @@ class MagnetDownloader(
                             it.copy(
                                 phase = DownloadPhase.FAILED,
                                 message = "Torrent download failed",
-                                error = "No peer returned the torrent metadata within two " +
-                                    "minutes. The swarm may have no seeders left, or this " +
-                                    "network may block peer traffic (try Wi-Fi instead of " +
-                                    "mobile data, or vice versa).",
+                                error = buildString {
+                                    append("No peer returned the torrent metadata within two minutes. ")
+                                    val hint = trackerReport?.hint
+                                    if (hint != null) {
+                                        append(hint)
+                                    } else {
+                                        append(
+                                            "The swarm may have no seeders left, or this network " +
+                                                "may block peer traffic (try Wi-Fi instead of " +
+                                                "mobile data, or vice versa).",
+                                        )
+                                    }
+                                },
                             )
                         }
                         runCatching { client?.stop() }
@@ -312,10 +347,13 @@ class MagnetDownloader(
      * [MagnetUri] (instead of the raw string) is what keeps the decoded tracker URLs out of
      * `MagnetUriParser`, which would otherwise re-break them.
      */
-    private fun MagnetLink.toBtMagnetUri(): MagnetUri {
+    private fun MagnetLink.toBtMagnetUri(peers: List<PeerAddress>): MagnetUri {
         val builder = MagnetUri.torrentId(TorrentId.fromBytes(infoHashBytes))
         displayName?.let { name -> builder.name(name) }
         trackers.forEach { url -> builder.tracker(url) }
+        peers.forEach { peer ->
+            runCatching { builder.peer(InetPeerAddress(peer.host, peer.port)) }
+        }
         return builder.buildUri()
     }
 
