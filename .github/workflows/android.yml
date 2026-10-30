@@ -193,6 +193,9 @@ jobs:
           * Always bonded: Wi-Fi + mobile data together (50/50, 8 range requests per radio) -
             there is no setting to turn it down. **Magnets are bonded too**: peer connections
             go through a loopback SOCKS5 proxy that dials half of them on each radio.
+          * Magnet bonding is TCP-only on purpose: uTP is UDP, which a SOCKS5 proxy cannot
+            carry, and libtorrent picks uTP for any peer that supports it - so it is switched
+            off while bonded and every peer connection is split over both radios.
           * Bonding is retried until both radios are up (a single attempt used to be made at
             launch, before mobile data is reachable - which is why magnets sometimes ran on
             one radio), and it only steps aside when the proxy itself cannot open a peer
