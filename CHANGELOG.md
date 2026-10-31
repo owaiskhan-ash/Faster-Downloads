@@ -3,6 +3,24 @@
 All notable changes to this project are documented here.
 This project follows [Semantic Versioning](https://semver.org/).
 
+## [0.10.0] - 2026-10-31
+
+### Added
+- **All-time downloads counter, kept in the repository.** `stats/downloads.json` holds one number
+  (`all`) plus the per-version breakdown behind it. A daily workflow
+  (`.github/workflows/downloads.yml`) merges GitHub's release counts into it with a
+  *highest-seen-wins* rule, so the counter can only go up: deleting a release, re-uploading an
+  APK (`--clobber` resets GitHub's own count to 0) or a failed API call can never lower it. The
+  file is committed, so the history is auditable in `git log`.
+- **The counter in the app.** A hairline download glyph with the number sits next to the day /
+  night switch in the header - 10 dp icon, `labelSmall` type, drawn with `Canvas` so no icon
+  asset or extra dependency is needed. It is read from the committed file
+  (`DownloadStats`), cached for six hours per run, and simply omitted when the number has never
+  been fetched: no spinner, no zero, no error.
+- README badge fed by the same file, so the badge, the app and the JSON always agree.
+- `DownloadStatsTest` covers the snapshot parsing (including "missing field is null, not 0") and
+  the compact `47` / `1.2k` / `2.5M` formatting.
+
 ## [0.9.2] - 2026-10-30
 
 ### Fixed

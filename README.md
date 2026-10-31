@@ -6,6 +6,7 @@ to a radio with Android's `Network` API. It also opens **magnet links** and pull
 BitTorrent swarm, over both radios.
 
 ![Android CI](https://github.com/owaiskhan-ash/Faster-Downloads/actions/workflows/android.yml/badge.svg)
+[![Downloads](https://img.shields.io/badge/dynamic/json?url=https%3A%2F%2Fraw.githubusercontent.com%2Fowaiskhan-ash%2FFaster-Downloads%2Fmain%2Fstats%2Fdownloads.json&query=%24.all&label=downloads&color=00e5a0)](https://github.com/owaiskhan-ash/Faster-Downloads/releases)
 
 **[Download the latest APK](https://github.com/owaiskhan-ash/Faster-Downloads/releases/latest)**
 
@@ -18,6 +19,15 @@ BitTorrent swarm, over both radios.
 3. Allow *install unknown apps* for your browser/file manager, then open the APK.
 
 Requires Android 8.0 (API 26) or newer.
+
+## Downloads counter
+
+Every release download is counted once a day and stored **in the repository**:
+[`stats/downloads.json`](stats/downloads.json) holds the running total (`all`) and the per-version
+numbers behind it. The merge keeps the highest count ever seen per version, so the counter never
+goes down - removing a release or re-uploading an APK cannot reset it, and `git log` on that file
+is the full history. The app shows the same number next to the day / night switch, and the badge
+above reads the file directly.
 
 ## How it works
 

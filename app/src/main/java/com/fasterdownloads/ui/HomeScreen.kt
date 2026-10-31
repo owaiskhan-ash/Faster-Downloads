@@ -1,6 +1,7 @@
 package com.fasterdownloads.ui
 
 import androidx.compose.foundation.BorderStroke
+import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -15,9 +16,11 @@ import androidx.compose.runtime.*
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Shape
+import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.input.KeyboardType
@@ -27,6 +30,7 @@ import com.fasterdownloads.core.DownloadController
 import com.fasterdownloads.core.DownloadKind
 import com.fasterdownloads.core.DownloadPhase
 import com.fasterdownloads.core.DownloadRequest
+import com.fasterdownloads.core.DownloadStats
 import com.fasterdownloads.core.DownloadUiState
 import com.fasterdownloads.core.LinkProgress
 import com.fasterdownloads.core.formatBytes
@@ -34,6 +38,8 @@ import com.fasterdownloads.core.formatDuration
 import com.fasterdownloads.core.formatSpeed
 import com.fasterdownloads.core.linkShares
 import com.fasterdownloads.service.DownloadService
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 
 private const val SAMPLE_URL = "https://speed.hetzner.de/100MB.bin"
 
@@ -50,6 +56,15 @@ fun FasterDownloadsApp(
 
     var url by rememberSaveable { mutableStateOf("") }
     var fileName by rememberSaveable { mutableStateOf("") }
+
+    // All-time downloads, read from the counter committed to the repository. Null until (and
+    // unless) it arrives, and the header simply omits it then.
+    var downloadsTotal by remember { mutableStateOf<Long?>(null) }
+    LaunchedEffect(Unit) {
+        if (downloadsTotal == null) {
+            downloadsTotal = withContext(Dispatchers.IO) { DownloadStats.total() }
+        }
+    }
 
     // A magnet link opened from a browser or shared to the app lands here.
     LaunchedEffect(incoming) {
@@ -77,7 +92,11 @@ fun FasterDownloadsApp(
                 .padding(horizontal = 20.dp, vertical = 20.dp),
             verticalArrangement = Arrangement.spacedBy(18.dp),
         ) {
-            Header(night = night, onToggleTheme = onToggleTheme)
+            Header(
+                night = night,
+                onToggleTheme = onToggleTheme,
+                downloadsTotal = downloadsTotal,
+            )
 
             Section(title = "New download") {
                 OutlinedTextField(
@@ -197,7 +216,7 @@ fun FasterDownloadsApp(
 }
 
 @Composable
-private fun Header(night: Boolean, onToggleTheme: () -> Unit) {
+private fun Header(night: Boolean, onToggleTheme: () -> Unit, downloadsTotal: Long?) {
     val fg = MaterialTheme.colorScheme.onBackground
     Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
         Row(
@@ -208,8 +227,12 @@ private fun Header(night: Boolean, onToggleTheme: () -> Unit) {
                 text = "MULTIPATH DOWNLOADER",
                 style = MaterialTheme.typography.labelMedium,
                 color = fg.copy(alpha = 0.75f),
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
                 modifier = Modifier.weight(1f),
             )
+            DownloadCountChip(total = downloadsTotal)
+            Spacer(modifier = Modifier.width(10.dp))
             ThemeToggle(night = night, onToggleTheme = onToggleTheme)
         }
         Text(
@@ -222,6 +245,39 @@ private fun Header(night: Boolean, onToggleTheme: () -> Unit) {
                 "side by side.",
             style = MaterialTheme.typography.bodyMedium,
             color = fg.copy(alpha = 0.62f),
+        )
+    }
+}
+
+/**
+ * Small all-time download counter for the header: a hairline download glyph and the number,
+ * both tiny, so it sits quietly beside the day / night switch. Hidden entirely when the number
+ * is not known - a failed lookup must not turn into a zero or an error.
+ */
+@Composable
+private fun DownloadCountChip(total: Long?) {
+    if (total == null || total <= 0L) return
+    val fg = MaterialTheme.colorScheme.onBackground
+    val ink = fg.copy(alpha = 0.6f)
+    Row(
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(4.dp),
+    ) {
+        Canvas(modifier = Modifier.size(10.dp)) {
+            val w = size.width
+            val h = size.height
+            val stroke = h * 0.12f
+            // Stem, arrow head and the floor line - drawn rather than an icon asset so the
+            // glyph stays hairline thin at 10 dp.
+            drawLine(ink, Offset(w * 0.5f, h * 0.06f), Offset(w * 0.5f, h * 0.62f), stroke, StrokeCap.Round)
+            drawLine(ink, Offset(w * 0.24f, h * 0.38f), Offset(w * 0.5f, h * 0.64f), stroke, StrokeCap.Round)
+            drawLine(ink, Offset(w * 0.76f, h * 0.38f), Offset(w * 0.5f, h * 0.64f), stroke, StrokeCap.Round)
+            drawLine(ink, Offset(w * 0.12f, h * 0.86f), Offset(w * 0.88f, h * 0.86f), stroke, StrokeCap.Round)
+        }
+        Text(
+            text = DownloadStats.format(total),
+            style = MaterialTheme.typography.labelSmall,
+            color = ink,
         )
     }
 }

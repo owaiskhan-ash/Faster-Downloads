@@ -1,0 +1,89 @@
+name: Downloads counter
+
+# Keeps an all-time downloads counter in the repository.
+#
+# GitHub already counts every release-asset download, but the number it hands out is a sum over
+# what exists *right now*: delete a release, or re-upload an APK with --clobber, and the total
+# goes down. This job snapshots the counts into stats/downloads.json where it becomes part of the
+# repository, and merges with a "highest seen wins" rule per version, so:
+#
+#   * the counter can only ever go up,
+#   * a version that is removed from GitHub keeps its share of the total,
+#   * the number is one figure for the whole app, irrespective of version (`all`).
+#
+# The app reads the same file for the small counter in its header, and the README badge does too,
+# so all three always agree.
+
+on:
+  schedule:
+    # 21:30 UTC = 03:00 IST, once a day.
+    - cron: "30 21 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: downloads-counter
+  cancel-in-progress: false
+
+jobs:
+  snapshot:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Merge the release counts into stats/downloads.json
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          gh api "repos/${GITHUB_REPOSITORY}/releases?per_page=100" --paginate --slurp > releases.json
+          python3 - <<'PY'
+          import datetime
+          import json
+          import pathlib
+
+          pages = json.loads(pathlib.Path("releases.json").read_text())
+          # One entry per release, summed over its assets (today: one APK per release).
+          seen = {}
+          for page in pages:
+              for release in page:
+                  tag = release.get("tag_name") or ""
+                  if not tag:
+                      continue
+                  total = sum(int(asset.get("download_count", 0)) for asset in release.get("assets", []))
+                  seen[tag] = total
+
+          path = pathlib.Path("stats/downloads.json")
+          previous = json.loads(path.read_text()) if path.exists() else {}
+          merged = {tag: int(count) for tag, count in previous.get("assets", {}).items()}
+          # Highest seen wins: a re-uploaded asset resets GitHub's count to zero, and a deleted
+          # release disappears from the API. Neither may lower the counter.
+          for tag, count in seen.items():
+              merged[tag] = max(merged.get(tag, 0), count)
+
+          snapshot = {
+              "updated": datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+              "assets": dict(sorted(merged.items())),
+              "all": sum(merged.values()),
+          }
+          path.parent.mkdir(parents=True, exist_ok=True)
+          path.write_text(json.dumps(snapshot, indent=2) + "\n")
+          print(json.dumps(snapshot, indent=2))
+          PY
+          rm -f releases.json
+
+      - name: Commit when the counter moved
+        run: |
+          set -euo pipefail
+          if git diff --quiet -- stats/downloads.json; then
+            echo "Counter unchanged."
+            exit 0
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add stats/downloads.json
+          # [skip ci] keeps this bookkeeping commit from rebuilding the app.
+          git commit -m "stats: downloads snapshot [skip ci]"
+          git push

@@ -205,6 +205,8 @@ jobs:
           * Each download card shows what **Wi-Fi** and **mobile data** are delivering
             separately - live speed and share of the total - for HTTP downloads and torrents.
           * Light and dark mode: neon-on-black inverts to black-on-neon with the system theme.
+          * A small all-time downloads counter sits next to the day / night switch, read from
+            `stats/downloads.json` - a counter kept in the repository, so it never resets.
           * Resumes interrupted transfers chunk-by-chunk and verifies the finished file.
           * Runs in a foreground service with one aggregated progress notification and a
             cancel-all action.
