@@ -12,8 +12,8 @@ android {
         applicationId = "com.fasterdownloads"
         minSdk = 26
         targetSdk = 35
-        versionCode = 17
-        versionName = "0.9.2"
+        versionCode = 18
+        versionName = "0.10.0"
         vectorDrawables { useSupportLibrary = true }
 
         // libtorrent4j ships one native library per ABI, and no Java fallback exists.
