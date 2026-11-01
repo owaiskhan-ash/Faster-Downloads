@@ -1,5 +1,7 @@
 package com.fasterdownloads.ui
 
+import android.content.Intent
+import android.net.Uri
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
@@ -42,6 +44,9 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 
 private const val SAMPLE_URL = "https://speed.hetzner.de/100MB.bin"
+
+/** Where the counter button sends you. */
+private const val RELEASES_URL = "https://github.com/owaiskhan-ash/Faster-Downloads/releases"
 
 @Composable
 fun FasterDownloadsApp(
@@ -96,6 +101,13 @@ fun FasterDownloadsApp(
                 night = night,
                 onToggleTheme = onToggleTheme,
                 downloadsTotal = downloadsTotal,
+                onOpenReleases = {
+                    runCatching {
+                        context.startActivity(
+                            Intent(Intent.ACTION_VIEW, Uri.parse(RELEASES_URL)),
+                        )
+                    }
+                },
             )
 
             Section(title = "New download") {
@@ -216,7 +228,12 @@ fun FasterDownloadsApp(
 }
 
 @Composable
-private fun Header(night: Boolean, onToggleTheme: () -> Unit, downloadsTotal: Long?) {
+private fun Header(
+    night: Boolean,
+    onToggleTheme: () -> Unit,
+    downloadsTotal: Long?,
+    onOpenReleases: () -> Unit,
+) {
     val fg = MaterialTheme.colorScheme.onBackground
     Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
         Row(
@@ -231,8 +248,8 @@ private fun Header(night: Boolean, onToggleTheme: () -> Unit, downloadsTotal: Lo
                 overflow = TextOverflow.Ellipsis,
                 modifier = Modifier.weight(1f),
             )
-            DownloadCountChip(total = downloadsTotal)
-            Spacer(modifier = Modifier.width(10.dp))
+            DownloadCountButton(total = downloadsTotal, onOpen = onOpenReleases)
+            Spacer(modifier = Modifier.width(8.dp))
             ThemeToggle(night = night, onToggleTheme = onToggleTheme)
         }
         Text(
@@ -250,35 +267,49 @@ private fun Header(night: Boolean, onToggleTheme: () -> Unit, downloadsTotal: Lo
 }
 
 /**
- * Small all-time download counter for the header: a hairline download glyph and the number,
- * both tiny, so it sits quietly beside the day / night switch. Hidden entirely when the number
- * is not known - a failed lookup must not turn into a zero or an error.
+ * The all-time download counter as a **button**, top right of the header.
+ *
+ * Small on purpose - a hairline outline pill holding a 10 dp download glyph and the number, the
+ * same weight as the day / night switch beside it. Tapping it opens the releases page, so the
+ * number is a control rather than decoration. Hidden when the count has never been fetched: a
+ * failed lookup must not become a "0" or an error.
  */
 @Composable
-private fun DownloadCountChip(total: Long?) {
+private fun DownloadCountButton(total: Long?, onOpen: () -> Unit) {
     if (total == null || total <= 0L) return
     val fg = MaterialTheme.colorScheme.onBackground
-    val ink = fg.copy(alpha = 0.6f)
+    val ink = fg.copy(alpha = 0.85f)
+    val shape = RoundedCornerShape(percent = 50)
     Row(
+        modifier = Modifier
+            .clip(shape)
+            .border(1.dp, fg.copy(alpha = 0.4f), shape)
+            .clickable(onClickLabel = "Open the releases page") { onOpen() }
+            .padding(horizontal = 8.dp, vertical = 4.dp),
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(4.dp),
     ) {
-        Canvas(modifier = Modifier.size(10.dp)) {
-            val w = size.width
-            val h = size.height
-            val stroke = h * 0.12f
-            // Stem, arrow head and the floor line - drawn rather than an icon asset so the
-            // glyph stays hairline thin at 10 dp.
-            drawLine(ink, Offset(w * 0.5f, h * 0.06f), Offset(w * 0.5f, h * 0.62f), stroke, StrokeCap.Round)
-            drawLine(ink, Offset(w * 0.24f, h * 0.38f), Offset(w * 0.5f, h * 0.64f), stroke, StrokeCap.Round)
-            drawLine(ink, Offset(w * 0.76f, h * 0.38f), Offset(w * 0.5f, h * 0.64f), stroke, StrokeCap.Round)
-            drawLine(ink, Offset(w * 0.12f, h * 0.86f), Offset(w * 0.88f, h * 0.86f), stroke, StrokeCap.Round)
-        }
+        DownloadGlyph(color = ink)
         Text(
             text = DownloadStats.format(total),
             style = MaterialTheme.typography.labelSmall,
             color = ink,
         )
+    }
+}
+
+/** The 10 dp download glyph used by the counter button - drawn, never an icon asset. */
+@Composable
+private fun DownloadGlyph(color: Color) {
+    Canvas(modifier = Modifier.size(10.dp)) {
+        val w = size.width
+        val h = size.height
+        val stroke = h * 0.12f
+        // Stem, arrow head, floor line: hairline thin at 10 dp, which no bundled icon is.
+        drawLine(color, Offset(w * 0.5f, h * 0.06f), Offset(w * 0.5f, h * 0.62f), stroke, StrokeCap.Round)
+        drawLine(color, Offset(w * 0.24f, h * 0.38f), Offset(w * 0.5f, h * 0.64f), stroke, StrokeCap.Round)
+        drawLine(color, Offset(w * 0.76f, h * 0.38f), Offset(w * 0.5f, h * 0.64f), stroke, StrokeCap.Round)
+        drawLine(color, Offset(w * 0.12f, h * 0.86f), Offset(w * 0.88f, h * 0.86f), stroke, StrokeCap.Round)
     }
 }
 

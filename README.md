@@ -26,8 +26,8 @@ Every release download is counted once a day and stored **in the repository**:
 [`stats/downloads.json`](stats/downloads.json) holds the running total (`all`) and the per-version
 numbers behind it. The merge keeps the highest count ever seen per version, so the counter never
 goes down - removing a release or re-uploading an APK cannot reset it, and `git log` on that file
-is the full history. The app shows the same number next to the day / night switch, and the badge
-above reads the file directly.
+is the full history. The app shows the same number in a small outline button beside the day /
+night switch (tap it to open the releases page), and the badge above reads the file directly.
 
 ## How it works
 
