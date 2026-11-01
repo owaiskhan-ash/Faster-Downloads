@@ -3,6 +3,16 @@
 All notable changes to this project are documented here.
 This project follows [Semantic Versioning](https://semver.org/).
 
+## [0.10.2] - 2026-11-01
+
+### Removed
+- **The downloads counter is gone from the app.** The header button, its download glyph and the
+  `DownloadStats` fetcher (and its test) are removed outright - no counter, no network call for
+  it, nothing left in the UI. The header is back to the label and the day / night switch.
+- The counter itself is untouched outside the app: `stats/downloads.json`, the daily
+  `Downloads counter` workflow and the README badge remain, so the all-time number is still
+  recorded in Git and still never goes down.
+
 ## [0.10.1] - 2026-11-01
 
 ### Changed
