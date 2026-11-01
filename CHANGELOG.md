@@ -3,6 +3,14 @@
 All notable changes to this project are documented here.
 This project follows [Semantic Versioning](https://semver.org/).
 
+## [0.10.1] - 2026-11-01
+
+### Changed
+- The downloads counter is now a **button**, not a bare icon and number: a small hairline outline
+  pill in the header, beside the day / night switch, holding a 10 dp download glyph and the
+  count. Tapping it opens the releases page. Same size and weight as before - it just behaves
+  like a control now, and it is still hidden when the count has never been fetched.
+
 ## [0.10.0] - 2026-10-31
 
 ### Added
